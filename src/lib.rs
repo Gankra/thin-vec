@@ -22,7 +22,7 @@ impl Header {
     fn data<T>(&self) -> *mut T { 
         let header_size = mem::size_of::<Header>();
         let header_align = mem::align_of::<Header>();
-        let elem_align =  mem::align_of::<Header>();
+        let elem_align =  mem::align_of::<T>();
 
         let ptr = self as *const Header as *mut Header as *mut u8;
 
@@ -55,8 +55,8 @@ fn alloc_size<T>(cap: usize) -> usize {
     // Compute "real" header size with pointer math
     let header_size =  mem::size_of::<Header>();
     let header_align =  mem::align_of::<Header>();
-    let elem_size =  mem::size_of::<Header>();
-    let elem_align =  mem::align_of::<Header>();
+    let elem_size =  mem::size_of::<T>();
+    let elem_align =  mem::align_of::<T>();
 
     
     let padding = if elem_align > header_align {
