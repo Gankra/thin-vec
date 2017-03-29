@@ -329,9 +329,11 @@ impl<T> ThinVec<T> {
     }
 
     unsafe fn deallocate(&mut self) {
-        heap::deallocate(self.ptr as *mut u8, 
-            alloc_size::<T>(self.capacity()),
-            mem::align_of::<Header>());
+        if self.capacity() > 0 {
+            heap::deallocate(self.ptr as *mut u8, 
+                alloc_size::<T>(self.capacity()),
+                mem::align_of::<Header>());
+        }
     } 
 }
 
@@ -599,6 +601,16 @@ impl<'a, T> Drop for Drain<'a, T> {
 
 // TODO: a million Index impls
 // TODO?: a million Cmp<[T; n]> impls
+
+#[cfg(test)]
+mod tests {
+    use super::ThinVec;
+
+    #[test]
+    fn test_drop_empty() {
+        let v = ThinVec::<u8>::new();
+    }
+}
 
 // TODO: steal Vec's tests
 fn main() {
