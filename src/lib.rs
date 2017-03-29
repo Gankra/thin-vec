@@ -6,6 +6,9 @@ use std::{ptr, mem, slice};
 use std::ops::{Deref, DerefMut};
 use alloc::heap;
 use std::marker::PhantomData;
+use std::cmp::*;
+use std::hash::*;
+use std::borrow::*;
 
 
 
@@ -24,7 +27,7 @@ impl Header {
         let ptr = self as *const Header as *mut Header as *mut u8;
 
         unsafe {
-            let padding = if elem_align > header_align {
+            if elem_align > header_align {
                 // Don't do `GEP [inbounds]` for high alignment so EMPTY_HEADER is safe
                 ptr.wrapping_offset((header_size + (elem_align - header_align)) as isize) as *mut T
             } else {
@@ -273,27 +276,32 @@ impl<T> ThinVec<T> {
         let old_len = self.len();
         let new_vec_len = old_len - at;
 
-        assert!(at <= old_len, "Index out of bounds")
+        assert!(at <= old_len, "Index out of bounds");
 
-        let mut new_vec = ThinVec::with_capacity(new_len);
+        unsafe {
+            let mut new_vec = ThinVec::with_capacity(new_vec_len);
 
-        ptr::copy_nonoverlapping(self.data_raw().offset(at as isize),
-                                 other.data_raw(),
-                                 new_vec_len)
+            ptr::copy_nonoverlapping(self.data_raw().offset(at as isize),
+                                     new_vec.data_raw(),
+                                     new_vec_len);
 
-        new_vec.set_len(new_vec_len);
-        self.set_len(at);
+            new_vec.set_len(new_vec_len);
+            self.set_len(at);
 
-        new_vec
+            new_vec
+        }
     }
     
     pub fn append(&mut self, other: &mut ThinVec<T>) {
-        self.extend(other.drain())
+        // TODO
+        // self.extend(other.drain())
     }
 
+    /* TODO: RangeArgument is a pain
     pub fn drain<R>(&mut self, range: R) -> Drain<T> where R: RangeArgument<usize> {
         // TODO
     }
+    */
 
     fn reserve_one_more(&mut self) {
         // TODO: capacity overflow logic?
@@ -338,7 +346,9 @@ impl<T: Clone> ThinVec<T> {
 }
 
 impl<T: PartialEq> ThinVec<T> {
-    fn dedup(&mut self) {}
+    fn dedup(&mut self) {
+        // TODO
+    }
 }
 
 impl<T> Drop for ThinVec<T> {
@@ -368,8 +378,9 @@ impl<T> DerefMut for ThinVec<T> {
     }
 }
 
-impl<T> Borrow<[T]> for Vec<T> {
+impl<T> Borrow<[T]> for ThinVec<T> {
     fn borrow(&self) -> &[T] {
+        self.as_slice()
     }
 }
 
@@ -385,9 +396,13 @@ impl<T> AsRef<[T]> for ThinVec<T> {
     }
 }
 
-impl<T> Extend<T> for ThinVec<T>
+impl<T> Extend<T> for ThinVec<T> {
     fn extend<I>(&mut self, iter: I) where I: IntoIterator<Item=T> {
-        // TODO
+        let iter = iter.into_iter();
+        self.reserve(iter.size_hint().0);
+        for x in iter {
+            self.push(x);
+        }
     }
 }
 
@@ -395,57 +410,138 @@ impl<T> Extend<T> for ThinVec<T>
 
 impl<T> Hash for ThinVec<T> where T: Hash {
     fn hash<H>(&self, state: &mut H) where H: Hasher {
-        // TODO
+        for x in self {
+            x.hash(state)
+        }
     }
 }
 impl<T> PartialOrd<ThinVec<T>> for ThinVec<T> where T: PartialOrd<T> {
     fn partial_cmp(&self, other: &ThinVec<T>) -> Option<Ordering> {
         // TODO
+        None
     }
 }
 
 impl<T> Ord for ThinVec<T> where T: Ord {
     fn cmp(&self, other: &ThinVec<T>) -> Ordering {
         // TODO
+        unimplemented!()
     }
 }
 
-impl<T> Eq for ThinVec<T> where T: PartialEq {
+impl<T> PartialEq for ThinVec<T> where T: PartialEq {
     fn eq(&self, other: &ThinVec<T>) -> bool {
         // TODO
+        false
     }
 }
 
 impl<T> Eq for ThinVec<T> where T: Eq {}
 
+impl<T> IntoIterator for ThinVec<T> {
+    type Item = T;
+    type IntoIter = IntoIter<T>;
 
+    fn into_iter(self) -> IntoIter<T> {
+        IntoIter { vec: self, start: 0 }
+    }
+}
 
 impl<'a, T> IntoIterator for &'a ThinVec<T> {
-    type Item = &'a T
-    type IntoIter = Iter<'a, T>
+    type Item = &'a T;
+    type IntoIter = Iter<'a, T>;
+
     fn into_iter(self) -> Iter<'a, T> {
-        // TODO
+        Iter(self.as_slice().iter())
     }
 }
 
 impl<'a, T> IntoIterator for &'a mut ThinVec<T> {
-    type Item = &'a mut T
-    type IntoIter = IterMut<'a, T>
+    type Item = &'a mut T;
+    type IntoIter = IterMut<'a, T>;
 
     fn into_iter(self) -> IterMut<'a, T> {
-        // TODO
+        IterMut(self.as_mut_slice().iter_mut())
     }
 }
 
 impl<T> Clone for ThinVec<T> where T: Clone {
-    fn clone(&self) -> Vec<T> {
-        // TODO
+    fn clone(&self) -> ThinVec<T> {
+        let mut new_vec = ThinVec::with_capacity(self.len());
+        new_vec.extend(self.iter().cloned());
+        new_vec
     }
 }
 
 impl<T> Default for ThinVec<T> {
     fn default() -> ThinVec<T> {
         ThinVec::new()
+    }
+}
+
+pub struct IntoIter<T> {
+    vec: ThinVec<T>,
+    start: usize,
+}
+
+pub struct Drain<'a, T: 'a> {
+    vec: &'a mut ThinVec<T>,
+    start: usize,
+    end: usize,
+    // TODO
+}
+
+pub struct Iter<'a, T: 'a>(slice::Iter<'a, T>);
+pub struct IterMut<'a, T: 'a>(slice::IterMut<'a, T>);
+
+impl<T> Iterator for IntoIter<T> {
+    type Item = T;
+    fn next(&mut self) -> Option<T> {
+        // TODO
+        unimplemented!()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        // TODO
+        unimplemented!()
+    }
+}
+
+impl<T> DoubleEndedIterator for IntoIter<T> {
+    fn next_back(&mut self) -> Option<T> {
+        // TODO
+        unimplemented!()
+    }
+}
+
+impl<'a, T> Iterator for Iter<'a, T> {
+    type Item = &'a T;
+    fn next(&mut self) -> Option<&'a T> {
+        self.0.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+impl<'a, T> DoubleEndedIterator for Iter<'a, T> {
+    fn next_back(&mut self) -> Option<&'a T> {
+        self.0.next_back()
+    }
+}
+impl<'a, T> Iterator for IterMut<'a, T> {
+    type Item = &'a mut T;
+    fn next(&mut self) -> Option<&'a mut T> {
+        self.0.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+impl<'a, T> DoubleEndedIterator for IterMut<'a, T> {
+    fn next_back(&mut self) -> Option<&'a mut T> {
+        self.0.next_back()
     }
 }
 
