@@ -86,7 +86,8 @@ fn header_with_capacity<T>(cap: usize) -> *mut Header {
 
         if header.is_null() { oom() }
 
-        (*header).cap = cap;
+        // "Infinite" capacity for zero-sized types:
+        (*header).cap = if mem::size_of::<T>() == 0 { !0 } else { cap };
         (*header).len = 0;
 
         header
@@ -176,14 +177,12 @@ impl<T> ThinVec<T> {
     pub fn is_empty(&self) -> bool { self.len() == 0 }
     pub fn capacity(&self) -> usize { self.header().cap }
     pub unsafe fn set_len(&mut self, len: usize) { self.header_mut().len = len }
-    
-
-
 
     pub fn push(&mut self, val: T) {
-        self.reserve_one_more();
-
         let old_len = self.len();
+        if old_len == self.capacity() {
+            self.reserve(1);
+        }
         unsafe {
             ptr::write(self.data_raw().offset(old_len as isize), val);
             self.set_len(old_len + 1);
@@ -204,8 +203,9 @@ impl<T> ThinVec<T> {
         let old_len = self.len();
 
         assert!(idx <= old_len, "Index out of bounds");
-        self.reserve_one_more();
-        
+        if old_len == self.capacity() {
+            self.reserve(1);
+        }
         unsafe {
             let ptr = self.data_raw();
             ptr::copy(ptr.offset(idx as isize), ptr.offset(idx as isize + 1), old_len - idx);
@@ -281,16 +281,56 @@ impl<T> ThinVec<T> {
         }
     }
 
+    /// Reserve capacity for at least `additional` more elements to be inserted.
+    ///
+    /// May reserve more space than requested, to avoid frequent reallocations.
+    ///
+    /// Panics if the new capacity overflows `usize`.
+    ///
+    /// Re-allocates only if `self.capacity() < self.len() + additional`.
     pub fn reserve(&mut self, additional: usize) {
-        // TODO
+        let len = self.len();
+        let old_cap = self.capacity();
+        let min_cap = len.checked_add(additional).expect("capacity overflow");
+        if min_cap <= old_cap {
+            return
+        }
+        // Ensure the new capacity is at least double, to guarantee exponential growth.
+        let double_cap = if old_cap == 0 {
+            // skip to 4 because tiny Vecs are dumb; but not if that would cause overflow
+            if mem::size_of::<T>() > (!0) / 8 { 1 } else { 4 }
+        } else {
+            old_cap.saturating_mul(2)
+        };
+        let new_cap = max(min_cap, double_cap);
+        unsafe {
+            self.reallocate(new_cap);
+        }
     }
 
+    /// Reserves the minimum capacity for `additional` more elements to be inserted.
+    ///
+    /// Panics if the new capacity overflows `usize`.
+    ///
+    /// Re-allocates only if `self.capacity() < self.len() + additional`.
     pub fn reserve_exact(&mut self, additional: usize) {
-        // TODO
+        let new_cap = self.len().checked_add(additional).expect("capacity overflow");
+        let old_cap = self.capacity();
+        if new_cap > old_cap {
+            unsafe {
+                self.reallocate(new_cap);
+            }
+        }
     }
 
     pub fn shrink_to_fit(&mut self) {
-        // TODO
+        let old_cap = self.capacity();
+        let new_cap = self.len();
+        if new_cap < old_cap {
+            unsafe {
+                self.reallocate(new_cap);
+            }
+        }
     }
 
     /// Retains only the elements specified by the predicate.
@@ -431,38 +471,31 @@ impl<T> ThinVec<T> {
     }
     */
 
-    fn reserve_one_more(&mut self) {
-        // TODO: capacity overflow logic?
-        let old_cap = self.capacity();
-        let old_len = self.len();
-
-        if old_cap <= old_len {
-            let elem_size = mem::size_of::<T>();
-
-            // "Infinite" capacity for ZSTs
-            let new_cap = if elem_size == 0 { !0 } else 
-                          if old_cap == 0 { 4 } else 
-                          { 2 * old_cap };
-
-            unsafe {
-                let old_data = self.data_raw();
-
-                let new_header = header_with_capacity::<T>(new_cap);
-                ptr::copy_nonoverlapping(old_data, (&*new_header).data::<T>(), old_len);
-                self.deallocate();
-                self.ptr = new_header;
-                self.set_len(old_len);
-            }
-        }
-    }
-
     unsafe fn deallocate(&mut self) {
         if self.capacity() > 0 {
             heap::deallocate(self.ptr as *mut u8, 
                 alloc_size::<T>(self.capacity()),
                 alloc_align::<T>());
         }
-    } 
+    }
+
+    /// Resize the buffer and update its capacity, without changing the length.
+    /// Unsafe because it can cause length to be greater than capacity.
+    unsafe fn reallocate(&mut self, new_cap: usize) {
+        let old_cap = self.capacity();
+        if old_cap == 0 {
+            self.ptr = header_with_capacity::<T>(new_cap);
+        } else {
+            self.ptr = heap::reallocate(self.ptr() as *mut u8,
+                                        alloc_size::<T>(old_cap),
+                                        alloc_size::<T>(new_cap),
+                                        alloc_align::<T>()) as *mut Header;
+            if self.ptr.is_null() {
+                oom()
+            }
+            self.header_mut().cap = new_cap;
+        }
+    }
 }
 
 impl<T: Clone> ThinVec<T> {
