@@ -415,24 +415,45 @@ impl<T> Hash for ThinVec<T> where T: Hash {
         }
     }
 }
+
 impl<T> PartialOrd<ThinVec<T>> for ThinVec<T> where T: PartialOrd<T> {
     fn partial_cmp(&self, other: &ThinVec<T>) -> Option<Ordering> {
-        // TODO
-        None
+        for (x, y) in self.iter().zip(other.iter()) {
+            match x.partial_cmp(y) { 
+                Some(Ordering::Equal) => { continue; }
+                ordering => { return ordering; }
+            }
+        }
+
+        // Whoever stopped first is the smaller one
+        Some(self.len().cmp(&other.len()))
     }
 }
 
 impl<T> Ord for ThinVec<T> where T: Ord {
     fn cmp(&self, other: &ThinVec<T>) -> Ordering {
-        // TODO
-        unimplemented!()
+        for (x, y) in self.iter().zip(other.iter()) {
+            match x.cmp(y) { 
+                Ordering::Equal => { continue; }
+                ordering => { return ordering; }
+            }
+        }
+
+        // Whoever stopped first is the smaller one
+        self.len().cmp(&other.len())
     }
 }
 
 impl<T> PartialEq for ThinVec<T> where T: PartialEq {
     fn eq(&self, other: &ThinVec<T>) -> bool {
-        // TODO
-        false
+        if self.len() == other.len() {
+            for (x, y) in self.iter().zip(other.iter()) {
+                if x != y { return false }
+            }
+            true
+        } else {
+            false
+        }
     }
 }
 
