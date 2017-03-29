@@ -472,19 +472,19 @@ impl<T> IntoIterator for ThinVec<T> {
 
 impl<'a, T> IntoIterator for &'a ThinVec<T> {
     type Item = &'a T;
-    type IntoIter = Iter<'a, T>;
+    type IntoIter = slice::Iter<'a, T>;
 
-    fn into_iter(self) -> Iter<'a, T> {
-        Iter(self.as_slice().iter())
+    fn into_iter(self) -> slice::Iter<'a, T> {
+        self.iter()
     }
 }
 
 impl<'a, T> IntoIterator for &'a mut ThinVec<T> {
     type Item = &'a mut T;
-    type IntoIter = IterMut<'a, T>;
+    type IntoIter = slice::IterMut<'a, T>;
 
-    fn into_iter(self) -> IterMut<'a, T> {
-        IterMut(self.as_mut_slice().iter_mut())
+    fn into_iter(self) -> slice::IterMut<'a, T> {
+        self.iter_mut()
     }
 }
 
@@ -514,9 +514,6 @@ pub struct Drain<'a, T: 'a> {
     // TODO
 }
 
-pub struct Iter<'a, T: 'a>(slice::Iter<'a, T>);
-pub struct IterMut<'a, T: 'a>(slice::IterMut<'a, T>);
-
 impl<T> Iterator for IntoIter<T> {
     type Item = T;
     fn next(&mut self) -> Option<T> {
@@ -545,37 +542,6 @@ impl<T> DoubleEndedIterator for IntoIter<T> {
             // FIXME?: extra bounds check
             self.vec.pop()
         }
-    }
-}
-
-impl<'a, T> Iterator for Iter<'a, T> {
-    type Item = &'a T;
-    fn next(&mut self) -> Option<&'a T> {
-        self.0.next()
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.0.size_hint()
-    }
-}
-impl<'a, T> DoubleEndedIterator for Iter<'a, T> {
-    fn next_back(&mut self) -> Option<&'a T> {
-        self.0.next_back()
-    }
-}
-impl<'a, T> Iterator for IterMut<'a, T> {
-    type Item = &'a mut T;
-    fn next(&mut self) -> Option<&'a mut T> {
-        self.0.next()
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.0.size_hint()
-    }
-}
-impl<'a, T> DoubleEndedIterator for IterMut<'a, T> {
-    fn next_back(&mut self) -> Option<&'a mut T> {
-        self.0.next_back()
     }
 }
 
