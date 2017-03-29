@@ -497,20 +497,31 @@ pub struct IterMut<'a, T: 'a>(slice::IterMut<'a, T>);
 impl<T> Iterator for IntoIter<T> {
     type Item = T;
     fn next(&mut self) -> Option<T> {
-        // TODO
-        unimplemented!()
+        if self.start == self.vec.len() {
+            None
+        } else {
+            unsafe {
+                let old_start = self.start;
+                self.start += 1;
+                Some(ptr::read(self.vec.data_raw().offset(old_start as isize)))
+            }
+        }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        // TODO
-        unimplemented!()
+        let len = self.vec.len() - self.start;
+        (len, Some(len))
     }
 }
 
 impl<T> DoubleEndedIterator for IntoIter<T> {
     fn next_back(&mut self) -> Option<T> {
-        // TODO
-        unimplemented!()
+        if self.start == self.vec.len() {
+            None
+        } else {
+            // FIXME?: extra bounds check
+            self.vec.pop()
+        }
     }
 }
 
@@ -542,6 +553,26 @@ impl<'a, T> Iterator for IterMut<'a, T> {
 impl<'a, T> DoubleEndedIterator for IterMut<'a, T> {
     fn next_back(&mut self) -> Option<&'a mut T> {
         self.0.next_back()
+    }
+}
+
+impl<T> Drop for IntoIter<T> {
+    fn drop(&mut self) {
+        unsafe {
+            if std::intrinsics::needs_drop::<T>() {
+                let mut vec = mem::replace(&mut self.vec, ThinVec::new());
+                for x in &mut vec[self.start..] {
+                    ptr::drop_in_place(x)
+                }
+                vec.set_len(0)
+            }
+        }
+    } 
+}
+
+impl<'a, T> Drop for Drain<'a, T> {
+    fn drop(&mut self) {
+        // TODO
     }
 }
 
