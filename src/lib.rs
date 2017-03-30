@@ -325,12 +325,76 @@ impl<T> ThinVec<T> {
         }
     }
 
-    pub fn dedup_by_key<F, K>(&mut self, key: F) where F: FnMut(&mut T) -> K, K: PartialEq<K> {
-        // TODO
+    /// Removes consecutive elements in the vector that resolve to the same key.
+    ///
+    /// If the vector is sorted, this removes all duplicates.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate thin_vec;
+    /// # fn main() {
+    /// let mut vec = thin_vec![10, 20, 21, 30, 20];
+    ///
+    /// vec.dedup_by_key(|i| *i / 10);
+    ///
+    /// assert_eq!(vec[..], [10, 20, 30, 20]);
+    /// # }
+    /// ```
+    pub fn dedup_by_key<F, K>(&mut self, mut key: F) where F: FnMut(&mut T) -> K, K: PartialEq<K> {
+        self.dedup_by(|a, b| key(a) == key(b))
     }
-    
-    pub fn dedup_by<F>(&mut self, same_bucket: F) where F: FnMut(&mut T, &mut T) -> bool {
-        // TODO
+
+    /// Removes consecutive elements in the vector according to a predicate.
+    ///
+    /// The `same_bucket` function is passed references to two elements from the vector, and
+    /// returns `true` if the elements compare equal, or `false` if they do not. Only the first
+    /// of adjacent equal items is kept.
+    ///
+    /// If the vector is sorted, this removes all duplicates.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate thin_vec;
+    /// # fn main() {
+    /// use std::ascii::AsciiExt;
+    ///
+    /// let mut vec = thin_vec!["foo", "bar", "Bar", "baz", "bar"];
+    ///
+    /// vec.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    ///
+    /// assert_eq!(vec[..], ["foo", "bar", "baz", "bar"]);
+    /// # }
+    /// ```
+    pub fn dedup_by<F>(&mut self, mut same_bucket: F) where F: FnMut(&mut T, &mut T) -> bool {
+        // See the comments in `Vec::dedup` for a detailed explanation of this code.
+        unsafe {
+            let ln = self.len();
+            if ln <= 1 {
+                return;
+            }
+
+            // Avoid bounds checks by using raw pointers.
+            let p = self.as_mut_ptr();
+            let mut r: usize = 1;
+            let mut w: usize = 1;
+
+            while r < ln {
+                let p_r = p.offset(r as isize);
+                let p_wm1 = p.offset((w - 1) as isize);
+                if !same_bucket(&mut *p_r, &mut *p_wm1) {
+                    if r != w {
+                        let p_w = p_wm1.offset(1);
+                        mem::swap(&mut *p_r, &mut *p_w);
+                    }
+                    w += 1;
+                }
+                r += 1;
+            }
+
+            self.truncate(w);
+        }
     }
 
     pub fn split_off(&mut self, at: usize) -> ThinVec<T> {
@@ -409,8 +473,24 @@ impl<T: Clone> ThinVec<T> {
 }
 
 impl<T: PartialEq> ThinVec<T> {
-    fn dedup(&mut self) {
-        // TODO
+    /// Removes consecutive repeated elements in the vector.
+    ///
+    /// If the vector is sorted, this removes all duplicates.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate thin_vec;
+    /// # fn main() {
+    /// let mut vec = thin_vec![1, 2, 2, 3, 2];
+    ///
+    /// vec.dedup();
+    ///
+    /// assert_eq!(vec[..], [1, 2, 3, 2]);
+    /// # }
+    /// ```
+    pub fn dedup(&mut self) {
+        self.dedup_by(|a, b| a == b)
     }
 }
 
