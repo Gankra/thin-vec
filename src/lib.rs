@@ -290,10 +290,41 @@ impl<T> ThinVec<T> {
         // TODO
     }
 
-    pub fn retain<F>(&mut self, f: F) where F: FnMut(&T) -> bool { 
-        // TODO
+    /// Retains only the elements specified by the predicate.
+    ///
+    /// In other words, remove all elements `e` such that `f(&e)` returns `false`.
+    /// This method operates in place and preserves the order of the retained
+    /// elements.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate thin_vec;
+    /// # fn main() {
+    /// let mut vec = thin_vec![1, 2, 3, 4];
+    /// vec.retain(|&x| x%2 == 0);
+    /// assert_eq!(&*vec, &[2, 4]);
+    /// # }
+    /// ```
+    pub fn retain<F>(&mut self, mut f: F) where F: FnMut(&T) -> bool {
+        let len = self.len();
+        let mut del = 0;
+        {
+            let v = &mut self[..];
+
+            for i in 0..len {
+                if !f(&v[i]) {
+                    del += 1;
+                } else if del > 0 {
+                    v.swap(i - del, i);
+                }
+            }
+        }
+        if del > 0 {
+            self.truncate(len - del);
+        }
     }
-    
+
     pub fn dedup_by_key<F, K>(&mut self, key: F) where F: FnMut(&mut T) -> K, K: PartialEq<K> {
         // TODO
     }
