@@ -2,7 +2,7 @@
 
 extern crate alloc;
 
-use std::{ptr, mem, slice};
+use std::{fmt, ptr, mem, slice};
 use std::ops::{Deref, DerefMut};
 use alloc::heap;
 use std::marker::PhantomData;
@@ -115,6 +115,36 @@ fn header_with_capacity<T>(cap: usize) -> *mut Header {
 pub struct ThinVec<T> {
     ptr: *const Header,
     boo: PhantomData<T>,
+}
+
+
+/// Creates a `ThinVec` containing the arguments.
+///
+/// ```
+/// #[macro_use] extern crate thin_vec;
+///
+/// fn main() {
+///     let v = thin_vec![1, 2, 3];
+///     assert_eq!(v.len(), 3);
+///     assert_eq!(v[0], 1);
+///     assert_eq!(v[1], 2);
+///     assert_eq!(v[2], 3);
+/// }
+/// ```
+#[macro_export]
+macro_rules! thin_vec {
+    /* TODO
+    ($elem:expr; $n:expr) => (
+        $crate::ThinVec::from_elem($elem, $n)
+    );
+    */
+    ($($x:expr),*) => ({
+        // TODO: Change this to work without cloning the elements.
+        let mut vec = $crate::ThinVec::new();
+        vec.extend_from_slice(&[$($x),*]);
+        vec
+    });
+    ($($x:expr,)*) => (thin_vec![$($x),*])
 }
 
 impl<T> ThinVec<T> {
@@ -260,16 +290,111 @@ impl<T> ThinVec<T> {
         // TODO
     }
 
-    pub fn retain<F>(&mut self, f: F) where F: FnMut(&T) -> bool { 
-        // TODO
+    /// Retains only the elements specified by the predicate.
+    ///
+    /// In other words, remove all elements `e` such that `f(&e)` returns `false`.
+    /// This method operates in place and preserves the order of the retained
+    /// elements.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate thin_vec;
+    /// # fn main() {
+    /// let mut vec = thin_vec![1, 2, 3, 4];
+    /// vec.retain(|&x| x%2 == 0);
+    /// assert_eq!(vec, [2, 4]);
+    /// # }
+    /// ```
+    pub fn retain<F>(&mut self, mut f: F) where F: FnMut(&T) -> bool {
+        let len = self.len();
+        let mut del = 0;
+        {
+            let v = &mut self[..];
+
+            for i in 0..len {
+                if !f(&v[i]) {
+                    del += 1;
+                } else if del > 0 {
+                    v.swap(i - del, i);
+                }
+            }
+        }
+        if del > 0 {
+            self.truncate(len - del);
+        }
     }
-    
-    pub fn dedup_by_key<F, K>(&mut self, key: F) where F: FnMut(&mut T) -> K, K: PartialEq<K> {
-        // TODO
+
+    /// Removes consecutive elements in the vector that resolve to the same key.
+    ///
+    /// If the vector is sorted, this removes all duplicates.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate thin_vec;
+    /// # fn main() {
+    /// let mut vec = thin_vec![10, 20, 21, 30, 20];
+    ///
+    /// vec.dedup_by_key(|i| *i / 10);
+    ///
+    /// assert_eq!(vec, [10, 20, 30, 20]);
+    /// # }
+    /// ```
+    pub fn dedup_by_key<F, K>(&mut self, mut key: F) where F: FnMut(&mut T) -> K, K: PartialEq<K> {
+        self.dedup_by(|a, b| key(a) == key(b))
     }
-    
-    pub fn dedup_by<F>(&mut self, same_bucket: F) where F: FnMut(&mut T, &mut T) -> bool {
-        // TODO
+
+    /// Removes consecutive elements in the vector according to a predicate.
+    ///
+    /// The `same_bucket` function is passed references to two elements from the vector, and
+    /// returns `true` if the elements compare equal, or `false` if they do not. Only the first
+    /// of adjacent equal items is kept.
+    ///
+    /// If the vector is sorted, this removes all duplicates.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate thin_vec;
+    /// # fn main() {
+    /// use std::ascii::AsciiExt;
+    ///
+    /// let mut vec = thin_vec!["foo", "bar", "Bar", "baz", "bar"];
+    ///
+    /// vec.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    ///
+    /// assert_eq!(vec, ["foo", "bar", "baz", "bar"]);
+    /// # }
+    /// ```
+    pub fn dedup_by<F>(&mut self, mut same_bucket: F) where F: FnMut(&mut T, &mut T) -> bool {
+        // See the comments in `Vec::dedup` for a detailed explanation of this code.
+        unsafe {
+            let ln = self.len();
+            if ln <= 1 {
+                return;
+            }
+
+            // Avoid bounds checks by using raw pointers.
+            let p = self.as_mut_ptr();
+            let mut r: usize = 1;
+            let mut w: usize = 1;
+
+            while r < ln {
+                let p_r = p.offset(r as isize);
+                let p_wm1 = p.offset((w - 1) as isize);
+                if !same_bucket(&mut *p_r, &mut *p_wm1) {
+                    if r != w {
+                        let p_w = p_wm1.offset(1);
+                        mem::swap(&mut *p_r, &mut *p_w);
+                    }
+                    w += 1;
+                }
+                r += 1;
+            }
+
+            self.truncate(w);
+        }
     }
 
     pub fn split_off(&mut self, at: usize) -> ThinVec<T> {
@@ -338,18 +463,34 @@ impl<T> ThinVec<T> {
 }
 
 impl<T: Clone> ThinVec<T> {
-    fn resize(&mut self, new_len: usize, value: T) {
+    pub fn resize(&mut self, new_len: usize, value: T) {
         // TODO
     }
-    
-    fn extend_from_slice(&mut self, other: &[T]) {
+
+    pub fn extend_from_slice(&mut self, other: &[T]) {
         self.extend(other.iter().cloned())
     }
 }
 
 impl<T: PartialEq> ThinVec<T> {
-    fn dedup(&mut self) {
-        // TODO
+    /// Removes consecutive repeated elements in the vector.
+    ///
+    /// If the vector is sorted, this removes all duplicates.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate thin_vec;
+    /// # fn main() {
+    /// let mut vec = thin_vec![1, 2, 2, 3, 2];
+    ///
+    /// vec.dedup();
+    ///
+    /// assert_eq!(vec, [1, 2, 3, 2]);
+    /// # }
+    /// ```
+    pub fn dedup(&mut self) {
+        self.dedup_by(|a, b| a == b)
     }
 }
 
@@ -408,7 +549,11 @@ impl<T> Extend<T> for ThinVec<T> {
     }
 }
 
-
+impl<T: fmt::Debug> fmt::Debug for ThinVec<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Debug::fmt(&**self, f)
+    }
+}
 
 impl<T> Hash for ThinVec<T> where T: Hash {
     fn hash<H>(&self, state: &mut H) where H: Hasher {
@@ -430,17 +575,9 @@ impl<T> Ord for ThinVec<T> where T: Ord {
     }
 }
 
-impl<T> PartialEq for ThinVec<T> where T: PartialEq {
-    fn eq(&self, other: &ThinVec<T>) -> bool {
-        if self.len() == other.len() {
-            for (x, y) in self.iter().zip(other.iter()) {
-                if x != y { return false }
-            }
-            true
-        } else {
-            false
-        }
-    }
+impl<T, U> PartialEq<U> for ThinVec<T> where U: for<'a> PartialEq<&'a [T]> {
+    fn eq(&self, other: &U) -> bool { *other == &self[..] }
+    fn ne(&self, other: &U) -> bool { *other != &self[..] }
 }
 
 impl<T> Eq for ThinVec<T> where T: Eq {}
@@ -558,18 +695,13 @@ mod tests {
 
     #[test]
     fn test_drop_empty() {
-        let v = ThinVec::<u8>::new();
+        ThinVec::<u8>::new();
+    }
+
+    #[test]
+    fn test_partial_eq() {
+        assert_eq!(thin_vec![0], thin_vec![0]);
+        assert_ne!(thin_vec![0], thin_vec![1]);
+        assert_eq!(thin_vec![1,2,3], vec![1,2,3]);
     }
 }
-
-// TODO: steal Vec's tests
-fn main() {
-    let mut vec = ThinVec::new();
-    vec.push(0);
-    vec.push(1);
-
-    println!("{:?}", vec.pop());
-    println!("{:?}", vec.pop());
-    println!("{:?}", vec.pop());
-}
-
