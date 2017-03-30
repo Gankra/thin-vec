@@ -412,37 +412,21 @@ impl<T> Extend<T> for ThinVec<T> {
 
 impl<T> Hash for ThinVec<T> where T: Hash {
     fn hash<H>(&self, state: &mut H) where H: Hasher {
-        for x in self {
-            x.hash(state)
-        }
+        self[..].hash(state);
     }
 }
 
-impl<T> PartialOrd<ThinVec<T>> for ThinVec<T> where T: PartialOrd<T> {
+impl<T> PartialOrd for ThinVec<T> where T: PartialOrd {
+    #[inline]
     fn partial_cmp(&self, other: &ThinVec<T>) -> Option<Ordering> {
-        for (x, y) in self.iter().zip(other.iter()) {
-            match x.partial_cmp(y) { 
-                Some(Ordering::Equal) => { continue; }
-                ordering => { return ordering; }
-            }
-        }
-
-        // Whoever stopped first is the smaller one
-        Some(self.len().cmp(&other.len()))
+        self[..].partial_cmp(&other[..])
     }
 }
 
 impl<T> Ord for ThinVec<T> where T: Ord {
+    #[inline]
     fn cmp(&self, other: &ThinVec<T>) -> Ordering {
-        for (x, y) in self.iter().zip(other.iter()) {
-            match x.cmp(y) { 
-                Ordering::Equal => { continue; }
-                ordering => { return ordering; }
-            }
-        }
-
-        // Whoever stopped first is the smaller one
-        self.len().cmp(&other.len())
+        self[..].cmp(&other[..])
     }
 }
 
