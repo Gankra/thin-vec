@@ -498,9 +498,7 @@ impl<T> Drop for ThinVec<T> {
     fn drop(&mut self) {
         unsafe {
             if std::intrinsics::needs_drop::<T>() {
-                for x in &mut self[..] {
-                    ptr::drop_in_place(x);
-                }
+                ptr::drop_in_place(&mut self [..]);
             }
             self.deallocate();
         }
@@ -671,9 +669,7 @@ impl<T> Drop for IntoIter<T> {
         unsafe {
             if std::intrinsics::needs_drop::<T>() {
                 let mut vec = mem::replace(&mut self.vec, ThinVec::new());
-                for x in &mut vec[self.start..] {
-                    ptr::drop_in_place(x)
-                }
+                ptr::drop_in_place(&mut vec[self.start..]);
                 vec.set_len(0)
             }
         }
