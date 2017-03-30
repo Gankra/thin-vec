@@ -21,18 +21,13 @@ struct Header {
 impl Header {
     fn data<T>(&self) -> *mut T { 
         let header_size = mem::size_of::<Header>();
-        let header_align = mem::align_of::<Header>();
-        let elem_align =  mem::align_of::<T>();
+        let padding = padding::<T>();
 
         let ptr = self as *const Header as *mut Header as *mut u8;
 
         unsafe {
-            if elem_align > header_align {
-                // Don't do `GEP [inbounds]` for high alignment so EMPTY_HEADER is safe
-                ptr.wrapping_offset((header_size + (elem_align - header_align)) as isize) as *mut T
-            } else {
-                ptr.offset(header_size as isize) as *mut T
-            }  
+            // Don't do `GEP [inbounds]` for high alignment so EMPTY_HEADER is safe
+            ptr.wrapping_offset((header_size + padding) as isize) as *mut T
         } 
     }
 }
@@ -53,35 +48,39 @@ fn oom() -> ! { std::process::abort() }
 
 fn alloc_size<T>(cap: usize) -> usize {
     // Compute "real" header size with pointer math
-    let header_size =  mem::size_of::<Header>();
-    let header_align =  mem::align_of::<Header>();
-    let elem_size =  mem::size_of::<T>();
-    let elem_align =  mem::align_of::<T>();
-
+    let header_size = mem::size_of::<Header>();
+    let elem_size = mem::size_of::<T>();
+    let padding = padding::<T>();
     
-    let padding = if elem_align > header_align {
-        elem_align - header_align
-    } else {
-        0
-    };
-
     // TODO: care about isize::MAX overflow?
     let data_size = elem_size.checked_mul(cap).expect("capacity overflow");
 
     data_size.checked_add(header_size + padding).expect("capacity overflow")
 }
 
-fn header_with_capacity<T>(cap: usize) -> *mut Header {            
-    let header_align = mem::align_of::<Header>();
+fn padding<T>() -> usize {
+    let alloc_align = alloc_align::<T>();
+    let header_size =  mem::size_of::<Header>();
 
+    if header_size % alloc_align == 0 {
+        0
+    } else {
+        alloc_align - header_size % alloc_align
+    }
+}
+
+fn alloc_align<T>() -> usize {
+    max(mem::align_of::<T>(), mem::align_of::<Header>())
+}
+
+fn header_with_capacity<T>(cap: usize) -> *mut Header {
     unsafe {
         let header = heap::allocate(
             alloc_size::<T>(cap), 
-            header_align
+            alloc_align::<T>(),
         ) as *mut Header; 
 
         if header.is_null() { oom() }
-
         
         (*header).cap = cap;
         (*header).len = 0;
@@ -457,7 +456,7 @@ impl<T> ThinVec<T> {
         if self.capacity() > 0 {
             heap::deallocate(self.ptr as *mut u8, 
                 alloc_size::<T>(self.capacity()),
-                mem::align_of::<Header>());
+                alloc_align::<T>());
         }
     } 
 }
