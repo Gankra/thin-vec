@@ -303,7 +303,7 @@ impl<T> ThinVec<T> {
     /// # fn main() {
     /// let mut vec = thin_vec![1, 2, 3, 4];
     /// vec.retain(|&x| x%2 == 0);
-    /// assert_eq!(&*vec, &[2, 4]);
+    /// assert_eq!(vec, [2, 4]);
     /// # }
     /// ```
     pub fn retain<F>(&mut self, mut f: F) where F: FnMut(&T) -> bool {
@@ -338,7 +338,7 @@ impl<T> ThinVec<T> {
     ///
     /// vec.dedup_by_key(|i| *i / 10);
     ///
-    /// assert_eq!(vec[..], [10, 20, 30, 20]);
+    /// assert_eq!(vec, [10, 20, 30, 20]);
     /// # }
     /// ```
     pub fn dedup_by_key<F, K>(&mut self, mut key: F) where F: FnMut(&mut T) -> K, K: PartialEq<K> {
@@ -364,7 +364,7 @@ impl<T> ThinVec<T> {
     ///
     /// vec.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
     ///
-    /// assert_eq!(vec[..], ["foo", "bar", "baz", "bar"]);
+    /// assert_eq!(vec, ["foo", "bar", "baz", "bar"]);
     /// # }
     /// ```
     pub fn dedup_by<F>(&mut self, mut same_bucket: F) where F: FnMut(&mut T, &mut T) -> bool {
@@ -486,7 +486,7 @@ impl<T: PartialEq> ThinVec<T> {
     ///
     /// vec.dedup();
     ///
-    /// assert_eq!(vec[..], [1, 2, 3, 2]);
+    /// assert_eq!(vec, [1, 2, 3, 2]);
     /// # }
     /// ```
     pub fn dedup(&mut self) {
@@ -591,17 +591,9 @@ impl<T> Ord for ThinVec<T> where T: Ord {
     }
 }
 
-impl<T> PartialEq for ThinVec<T> where T: PartialEq {
-    fn eq(&self, other: &ThinVec<T>) -> bool {
-        if self.len() == other.len() {
-            for (x, y) in self.iter().zip(other.iter()) {
-                if x != y { return false }
-            }
-            true
-        } else {
-            false
-        }
-    }
+impl<T, U> PartialEq<U> for ThinVec<T> where U: for<'a> PartialEq<&'a [T]> {
+    fn eq(&self, other: &U) -> bool { *other == &self[..] }
+    fn ne(&self, other: &U) -> bool { *other != &self[..] }
 }
 
 impl<T> Eq for ThinVec<T> where T: Eq {}
@@ -720,6 +712,13 @@ mod tests {
     #[test]
     fn test_drop_empty() {
         let v = ThinVec::<u8>::new();
+    }
+
+    #[test]
+    fn test_partial_eq() {
+        assert_eq!(thin_vec![0], thin_vec![0]);
+        assert_ne!(thin_vec![0], thin_vec![1]);
+        assert_eq!(thin_vec![1,2,3], vec![1,2,3]);
     }
 }
 
