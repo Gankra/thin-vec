@@ -711,7 +711,7 @@ mod tests {
 
     #[test]
     fn test_drop_empty() {
-        let v = ThinVec::<u8>::new();
+        ThinVec::<u8>::new();
     }
 
     #[test]
@@ -721,15 +721,3 @@ mod tests {
         assert_eq!(thin_vec![1,2,3], vec![1,2,3]);
     }
 }
-
-// TODO: steal Vec's tests
-fn main() {
-    let mut vec = ThinVec::new();
-    vec.push(0);
-    vec.push(1);
-
-    println!("{:?}", vec.pop());
-    println!("{:?}", vec.pop());
-    println!("{:?}", vec.pop());
-}
-
