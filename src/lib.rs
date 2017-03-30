@@ -117,6 +117,36 @@ pub struct ThinVec<T> {
     boo: PhantomData<T>,
 }
 
+
+/// Creates a `ThinVec` containing the arguments.
+///
+/// ```
+/// #[macro_use] extern crate thin_vec;
+///
+/// fn main() {
+///     let v = thin_vec![1, 2, 3];
+///     assert_eq!(v.len(), 3);
+///     assert_eq!(v[0], 1);
+///     assert_eq!(v[1], 2);
+///     assert_eq!(v[2], 3);
+/// }
+/// ```
+#[macro_export]
+macro_rules! thin_vec {
+    /* TODO
+    ($elem:expr; $n:expr) => (
+        $crate::ThinVec::from_elem($elem, $n)
+    );
+    */
+    ($($x:expr),*) => ({
+        // TODO: Change this to work without cloning the elements.
+        let mut vec = $crate::ThinVec::new();
+        vec.extend_from_slice(&[$($x),*]);
+        vec
+    });
+    ($($x:expr,)*) => (thin_vec![$($x),*])
+}
+
 impl<T> ThinVec<T> {
     pub fn new() -> ThinVec<T> {
         ThinVec {
@@ -338,11 +368,11 @@ impl<T> ThinVec<T> {
 }
 
 impl<T: Clone> ThinVec<T> {
-    fn resize(&mut self, new_len: usize, value: T) {
+    pub fn resize(&mut self, new_len: usize, value: T) {
         // TODO
     }
-    
-    fn extend_from_slice(&mut self, other: &[T]) {
+
+    pub fn extend_from_slice(&mut self, other: &[T]) {
         self.extend(other.iter().cloned())
     }
 }
