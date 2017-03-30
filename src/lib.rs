@@ -2,7 +2,7 @@
 
 extern crate alloc;
 
-use std::{ptr, mem, slice};
+use std::{fmt, ptr, mem, slice};
 use std::ops::{Deref, DerefMut};
 use alloc::heap;
 use std::marker::PhantomData;
@@ -408,7 +408,11 @@ impl<T> Extend<T> for ThinVec<T> {
     }
 }
 
-
+impl<T: fmt::Debug> fmt::Debug for ThinVec<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Debug::fmt(&**self, f)
+    }
+}
 
 impl<T> Hash for ThinVec<T> where T: Hash {
     fn hash<H>(&self, state: &mut H) where H: Hasher {
