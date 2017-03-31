@@ -129,15 +129,18 @@ pub struct ThinVec<T> {
 ///     assert_eq!(v[0], 1);
 ///     assert_eq!(v[1], 2);
 ///     assert_eq!(v[2], 3);
+///
+///     let v = vec![1; 3];
+///     assert_eq!(v, [1, 1, 1]);
 /// }
 /// ```
 #[macro_export]
 macro_rules! thin_vec {
-    /* TODO
-    ($elem:expr; $n:expr) => (
-        $crate::ThinVec::from_elem($elem, $n)
-    );
-    */
+    ($elem:expr; $n:expr) => ({
+        let mut vec = $crate::ThinVec::new();
+        vec.resize($n, $elem);
+        vec
+    });
     ($($x:expr),*) => ({
         // TODO: Change this to work without cloning the elements.
         let mut vec = $crate::ThinVec::new();
@@ -463,8 +466,42 @@ impl<T> ThinVec<T> {
 }
 
 impl<T: Clone> ThinVec<T> {
+    /// Resizes the `Vec` in-place so that `len()` is equal to `new_len`.
+    ///
+    /// If `new_len` is greater than `len()`, the `Vec` is extended by the
+    /// difference, with each additional slot filled with `value`.
+    /// If `new_len` is less than `len()`, the `Vec` is simply truncated.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate thin_vec;
+    /// # fn main() {
+    /// let mut vec = thin_vec!["hello"];
+    /// vec.resize(3, "world");
+    /// assert_eq!(vec, ["hello", "world", "world"]);
+    ///
+    /// let mut vec = thin_vec![1, 2, 3, 4];
+    /// vec.resize(2, 0);
+    /// assert_eq!(vec, [1, 2]);
+    /// # }
+    /// ```
     pub fn resize(&mut self, new_len: usize, value: T) {
-        // TODO
+        let old_len = self.len();
+
+        if new_len > old_len {
+            let additional = new_len - old_len;
+            self.reserve(additional);
+            for _ in 1..additional {
+                self.push(value.clone());
+            }
+            // We can write the last element directly without cloning needlessly
+            if additional > 0 {
+                self.push(value);
+            }
+        } else if new_len < old_len {
+            self.truncate(new_len);
+        }
     }
 
     pub fn extend_from_slice(&mut self, other: &[T]) {
