@@ -175,8 +175,10 @@ impl<T> ThinVec<T> {
 
     fn ptr(&self) -> *mut Header { *self.ptr as *mut _ }
     fn header(&self) -> &Header { unsafe { &**self.ptr } }
-    fn header_mut(&mut self) -> &mut Header { unsafe { &mut *self.ptr() } }
     fn data_raw(&self) -> *mut T { self.header().data() }
+
+    // This is unsafe when the header is EMPTY_HEADER.
+    unsafe fn header_mut(&mut self) -> &mut Header { &mut *self.ptr() }
 
     pub fn len(&self) -> usize { self.header().len }
     pub fn is_empty(&self) -> bool { self.len() == 0 }
