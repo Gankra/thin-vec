@@ -78,6 +78,7 @@ fn alloc_align<T>() -> usize {
 }
 
 fn header_with_capacity<T>(cap: usize) -> Shared<Header> {
+    debug_assert!(cap > 0);
     unsafe {
         let header = heap::allocate(
             alloc_size::<T>(cap), 
@@ -165,9 +166,13 @@ impl<T> ThinVec<T> {
     }
 
     pub fn with_capacity(cap: usize) -> ThinVec<T> {
-        ThinVec { 
-            ptr: header_with_capacity::<T>(cap), 
-            boo: PhantomData 
+        if cap == 0 {
+            ThinVec::new()
+        } else {
+            ThinVec {
+                ptr: header_with_capacity::<T>(cap),
+                boo: PhantomData,
+            }
         }
     }
 
@@ -332,8 +337,12 @@ impl<T> ThinVec<T> {
         let old_cap = self.capacity();
         let new_cap = self.len();
         if new_cap < old_cap {
-            unsafe {
-                self.reallocate(new_cap);
+            if new_cap == 0 {
+                *self = ThinVec::new();
+            } else {
+                unsafe {
+                    self.reallocate(new_cap);
+                }
             }
         }
     }
@@ -477,7 +486,7 @@ impl<T> ThinVec<T> {
     */
 
     unsafe fn deallocate(&mut self) {
-        if self.capacity() > 0 {
+        if self.has_allocation() {
             heap::deallocate(self.ptr() as *mut u8,
                 alloc_size::<T>(self.capacity()),
                 alloc_align::<T>());
@@ -487,10 +496,9 @@ impl<T> ThinVec<T> {
     /// Resize the buffer and update its capacity, without changing the length.
     /// Unsafe because it can cause length to be greater than capacity.
     unsafe fn reallocate(&mut self, new_cap: usize) {
-        let old_cap = self.capacity();
-        if old_cap == 0 {
-            self.ptr = header_with_capacity::<T>(new_cap);
-        } else {
+        debug_assert!(new_cap > 0);
+        if self.has_allocation() {
+            let old_cap = self.capacity();
             let ptr = heap::reallocate(self.ptr() as *mut u8,
                                        alloc_size::<T>(old_cap),
                                        alloc_size::<T>(new_cap),
@@ -498,7 +506,14 @@ impl<T> ThinVec<T> {
             if ptr.is_null() { oom() }
             (*ptr).cap = new_cap;
             self.ptr = Shared::new(ptr);
+        } else {
+            self.ptr = header_with_capacity::<T>(new_cap);
         }
+    }
+
+    #[inline]
+    fn has_allocation(&self) -> bool {
+        *self.ptr != &EMPTY_HEADER as *const Header
     }
 }
 
@@ -780,5 +795,23 @@ mod tests {
         assert_eq!(thin_vec![0], thin_vec![0]);
         assert_ne!(thin_vec![0], thin_vec![1]);
         assert_eq!(thin_vec![1,2,3], vec![1,2,3]);
+    }
+
+    #[test]
+    fn test_alloc() {
+        let mut v = ThinVec::new();
+        assert!(!v.has_allocation());
+        v.push(1);
+        assert!(v.has_allocation());
+        v.pop();
+        assert!(v.has_allocation());
+        v.shrink_to_fit();
+        assert!(!v.has_allocation());
+        v.reserve(64);
+        assert!(v.has_allocation());
+        v = ThinVec::with_capacity(64);
+        assert!(v.has_allocation());
+        v = ThinVec::with_capacity(0);
+        assert!(!v.has_allocation());
     }
 }
