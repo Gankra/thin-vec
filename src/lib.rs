@@ -1,4 +1,4 @@
-#![feature(alloc, heap_api, process_abort, core_intrinsics)]
+#![feature(alloc, heap_api, process_abort, core_intrinsics, shared)]
 
 extern crate alloc;
 
@@ -9,7 +9,7 @@ use std::marker::PhantomData;
 use std::cmp::*;
 use std::hash::*;
 use std::borrow::*;
-
+use std::ptr::Shared;
 
 
 /// The header of a ThinVec
@@ -77,7 +77,7 @@ fn alloc_align<T>() -> usize {
     max(mem::align_of::<T>(), mem::align_of::<Header>())
 }
 
-fn header_with_capacity<T>(cap: usize) -> *mut Header {
+fn header_with_capacity<T>(cap: usize) -> Shared<Header> {
     unsafe {
         let header = heap::allocate(
             alloc_size::<T>(cap), 
@@ -90,7 +90,7 @@ fn header_with_capacity<T>(cap: usize) -> *mut Header {
         (*header).cap = if mem::size_of::<T>() == 0 { !0 } else { cap };
         (*header).len = 0;
 
-        header
+        Shared::new(header)
     }
 }
 
@@ -109,7 +109,7 @@ fn header_with_capacity<T>(cap: usize) -> *mut Header {
 /// Properties of Vec that are preserved: 
 /// * `ThinVec::new()` doesn't allocate (it points to a statically allocated singleton)
 /// * reallocation can be done in place
-/// * `size_of::<ThinVec<T>>()` == `size_of::<Option<ThinVec<T>>>()` (TODO) 
+/// * `size_of::<ThinVec<T>>()` == `size_of::<Option<ThinVec<T>>>()`
 ///
 /// Properties of Vec that aren't preserved:
 /// * `ThinVec<T>` can't ever be zero-cost roundtripped to a `Box<[T]>`, `String`, or `*mut T`
@@ -117,7 +117,7 @@ fn header_with_capacity<T>(cap: usize) -> *mut Header {
 /// * ThinVec currently doesn't bother to not-allocate for Zero Sized Types (e.g. `ThinVec<()>`),
 ///   but it could be done if someone cared enough to implement it.
 pub struct ThinVec<T> {
-    ptr: *const Header,
+    ptr: Shared<Header>,
     boo: PhantomData<T>,
 }
 
@@ -156,9 +156,11 @@ macro_rules! thin_vec {
 
 impl<T> ThinVec<T> {
     pub fn new() -> ThinVec<T> {
-        ThinVec {
-            ptr: &EMPTY_HEADER,
-            boo: PhantomData,
+        unsafe {
+            ThinVec {
+                ptr: Shared::new(&EMPTY_HEADER as *const Header),
+                boo: PhantomData,
+            }
         }
     }
 
@@ -171,8 +173,8 @@ impl<T> ThinVec<T> {
 
     // Accessor conveniences
 
-    fn ptr(&self) -> *mut Header { self.ptr as *mut _ }
-    fn header(&self) -> &Header { unsafe { &*self.ptr } }
+    fn ptr(&self) -> *mut Header { *self.ptr as *mut _ }
+    fn header(&self) -> &Header { unsafe { &**self.ptr } }
     fn header_mut(&mut self) -> &mut Header { unsafe { &mut *self.ptr() } }
     fn data_raw(&self) -> *mut T { self.header().data() }
 
@@ -476,7 +478,7 @@ impl<T> ThinVec<T> {
 
     unsafe fn deallocate(&mut self) {
         if self.capacity() > 0 {
-            heap::deallocate(self.ptr as *mut u8, 
+            heap::deallocate(self.ptr() as *mut u8,
                 alloc_size::<T>(self.capacity()),
                 alloc_align::<T>());
         }
@@ -489,14 +491,13 @@ impl<T> ThinVec<T> {
         if old_cap == 0 {
             self.ptr = header_with_capacity::<T>(new_cap);
         } else {
-            self.ptr = heap::reallocate(self.ptr() as *mut u8,
-                                        alloc_size::<T>(old_cap),
-                                        alloc_size::<T>(new_cap),
-                                        alloc_align::<T>()) as *mut Header;
-            if self.ptr.is_null() {
-                oom()
-            }
-            self.header_mut().cap = new_cap;
+            let ptr = heap::reallocate(self.ptr() as *mut u8,
+                                       alloc_size::<T>(old_cap),
+                                       alloc_size::<T>(new_cap),
+                                       alloc_align::<T>()) as *mut Header;
+            if ptr.is_null() { oom() }
+            (*ptr).cap = new_cap;
+            self.ptr = Shared::new(ptr);
         }
     }
 }
@@ -761,6 +762,13 @@ impl<'a, T> Drop for Drain<'a, T> {
 #[cfg(test)]
 mod tests {
     use super::ThinVec;
+
+    #[test]
+    fn test_size_of() {
+        use std::mem::size_of;
+        assert_eq!(size_of::<ThinVec<u8>>(), size_of::<&u8>());
+        assert_eq!(size_of::<Option<ThinVec<u8>>>(), size_of::<&u8>());
+    }
 
     #[test]
     fn test_drop_empty() {
