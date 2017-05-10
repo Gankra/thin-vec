@@ -476,7 +476,7 @@ impl<T> ThinVec<T> {
         }
     }
     
-    pub fn append(&mut self, other: &mut ThinVec<T>) {
+    pub fn append(&mut self, _other: &mut ThinVec<T>) {
         // TODO
         // self.extend(other.drain())
     }
@@ -717,12 +717,14 @@ pub struct IntoIter<T> {
     start: usize,
 }
 
+/*
 pub struct Drain<'a, T: 'a> {
     vec: &'a mut ThinVec<T>,
     start: usize,
     end: usize,
     // TODO
 }
+*/
 
 impl<T> Iterator for IntoIter<T> {
     type Item = T;
@@ -767,11 +769,13 @@ impl<T> Drop for IntoIter<T> {
     } 
 }
 
+/*
 impl<'a, T> Drop for Drain<'a, T> {
     fn drop(&mut self) {
         // TODO
     }
 }
+*/
 
 // TODO: a million Index impls
 // TODO?: a million Cmp<[T; n]> impls
