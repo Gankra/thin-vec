@@ -1,4 +1,4 @@
-#![feature(alloc, heap_api, process_abort, core_intrinsics, shared)]
+#![feature(alloc, heap_api, shared)]
 
 extern crate alloc;
 
@@ -260,24 +260,15 @@ impl<T> ThinVec<T> {
         assert!(len <= old_len, "Can't truncate to a larger len than the current one");
 
         unsafe {
-            if std::intrinsics::needs_drop::<T>() {
-                for x in &mut self[len..] {
-                    ptr::drop_in_place(x)
-                }
-            }
+            ptr::drop_in_place(&mut self [len..]);
             self.set_len(len);
         }
     }
 
     pub fn clear(&mut self) {
         unsafe {
-            if std::intrinsics::needs_drop::<T>() {
-                for x in &mut self[..] {
-                    ptr::drop_in_place(x);
-                }
-            }
-
-            self.set_len(0)
+            ptr::drop_in_place(&mut self[..]);
+            self.set_len(0);
         }
     }
 
@@ -588,9 +579,7 @@ impl<T: PartialEq> ThinVec<T> {
 impl<T> Drop for ThinVec<T> {
     fn drop(&mut self) {
         unsafe {
-            if std::intrinsics::needs_drop::<T>() {
-                ptr::drop_in_place(&mut self [..]);
-            }
+            ptr::drop_in_place(&mut self [..]);
             self.deallocate();
         }
     }
@@ -760,11 +749,9 @@ impl<T> DoubleEndedIterator for IntoIter<T> {
 impl<T> Drop for IntoIter<T> {
     fn drop(&mut self) {
         unsafe {
-            if std::intrinsics::needs_drop::<T>() {
-                let mut vec = mem::replace(&mut self.vec, ThinVec::new());
-                ptr::drop_in_place(&mut vec[self.start..]);
-                vec.set_len(0)
-            }
+            let mut vec = mem::replace(&mut self.vec, ThinVec::new());
+            ptr::drop_in_place(&mut vec[self.start..]);
+            vec.set_len(0)
         }
     } 
 }
