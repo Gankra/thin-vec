@@ -3,6 +3,7 @@
 mod range;
 
 use std::{fmt, ptr, mem, slice};
+use std::iter::FromIterator;
 use std::ops::{Deref, DerefMut};
 use std::marker::PhantomData;
 use std::cmp::*;
@@ -907,6 +908,15 @@ impl<T> Clone for ThinVec<T> where T: Clone {
 impl<T> Default for ThinVec<T> {
     fn default() -> ThinVec<T> {
         ThinVec::new()
+    }
+}
+
+impl<T> FromIterator<T> for ThinVec<T> {
+    #[inline]
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> ThinVec<T> {
+        let mut vec = ThinVec::new();
+        vec.extend(iter.into_iter());
+        vec
     }
 }
 
