@@ -419,6 +419,15 @@ impl<T> ThinVec<T> {
             return
         }
 
+        // The growth logic can't handle zero-sized types, so we have to exit
+        // early here.
+        if elem_size == 0 {
+            unsafe {
+                self.reallocate(min_cap);
+            }
+            return;
+        }
+
         let min_cap_bytes = assert_size(min_cap)
             .checked_mul(assert_size(elem_size))
             .and_then(|x| x.checked_add(assert_size(mem::size_of::<Header>())))
