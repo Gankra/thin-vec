@@ -97,7 +97,14 @@ impl Header {
 /// optimize everything to not do that (basically, make ptr == len and branch
 /// on size == 0 in every method), but it's a bunch of work for something that
 /// doesn't matter much.
+#[cfg(not(feature = "gecko-ffi"))]
 static EMPTY_HEADER: Header = Header { _len: 0, _cap: 0 };
+
+#[cfg(feature = "gecko-ffi")]
+extern {
+    #[link_name = "sEmptyTArrayHeader"]
+    static EMPTY_HEADER: Header;
+}
 
 
 // TODO: overflow checks everywhere
@@ -564,9 +571,19 @@ impl<T> ThinVec<T> {
         }
     }
 
+    #[cfg(feature = "gecko-ffi")]
     #[inline]
     fn has_allocation(&self) -> bool {
-        self.ptr.as_ptr() as *const Header != &EMPTY_HEADER as *const Header
+        unsafe {
+            self.ptr.as_ptr() as *const Header != &EMPTY_HEADER &&
+                !self.ptr.as_ref().uses_stack_allocated_buffer()
+        }
+    }
+
+    #[cfg(not(feature = "gecko-ffi"))]
+    #[inline]
+    fn has_allocation(&self) -> bool {
+        self.ptr.as_ptr() as *const Header != &EMPTY_HEADER
     }
 }
 
