@@ -22,28 +22,57 @@ mod shared;
 #[cfg(not(feature = "unstable"))]
 use shared::Shared;
 
+#[cfg(not(feature = "gecko-ffi"))]
+type SizeType = usize;
+#[cfg(feature = "gecko-ffi")]
+type SizeType = u32;
+
+#[cfg(feature = "gecko-ffi")]
+const AUTO_MASK: u32 = 1 << 31;
+#[cfg(feature = "gecko-ffi")]
+const CAP_MASK: u32 = !AUTO_MASK;
+
 /// The header of a ThinVec
 #[repr(C)]
 struct Header {
-    _len: usize,
-    _cap: usize,
+    _len: SizeType,
+    _cap: SizeType,
 }
 
 impl Header {
     fn len(&self) -> usize {
-        self._len
+        self._len as usize
     }
 
+    #[cfg(feature = "gecko-ffi")]
     fn cap(&self) -> usize {
-        self._cap
+        (self._cap & CAP_MASK) as usize
+    }
+
+    #[cfg(not(feature = "gecko-ffi"))]
+    fn cap(&self) -> usize {
+        self._cap as usize
     }
 
     fn set_len(&mut self, len: usize) {
-        self._len = len;
+        self._len = len as SizeType;
     }
 
+    #[cfg(feature = "gecko-ffi")]
     fn set_cap(&mut self, cap: usize) {
-        self._cap = cap;
+        debug_assert!(cap & (CAP_MASK as usize) == cap);
+        debug_assert!(!self.uses_stack_allocated_buffer());
+        self._cap = (cap as SizeType) & CAP_MASK;
+    }
+
+    #[cfg(feature = "gecko-ffi")]
+    fn uses_stack_allocated_buffer(&self) -> bool {
+        self._cap & AUTO_MASK != 0
+    }
+
+    #[cfg(not(feature = "gecko-ffi"))]
+    fn set_cap(&mut self, cap: usize) {
+        self._cap = cap as SizeType;
     }
 
     fn data<T>(&self) -> *mut T {
