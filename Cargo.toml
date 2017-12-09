@@ -4,7 +4,9 @@ version = "0.1.0"
 authors = ["Alexis Beingessner <a.beingessner@gmail.com>"]
 
 [features]
-defeault = []
+unstable = []
+default = []
 gecko-ffi = []
 
 [dependencies]
+libc = "0.2"
