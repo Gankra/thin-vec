@@ -110,10 +110,10 @@ impl Header {
 /// optimize everything to not do that (basically, make ptr == len and branch
 /// on size == 0 in every method), but it's a bunch of work for something that
 /// doesn't matter much.
-#[cfg(not(feature = "gecko-ffi"))]
+#[cfg(not(feature = "gecko-internal"))]
 static EMPTY_HEADER: Header = Header { _len: 0, _cap: 0 };
 
-#[cfg(feature = "gecko-ffi")]
+#[cfg(feature = "gecko-internal")]
 extern {
     #[link_name = "sEmptyTArrayHeader"]
     static EMPTY_HEADER: Header;
@@ -191,6 +191,7 @@ fn header_with_capacity<T>(cap: usize) -> Shared<Header> {
 /// * `ThinVec::new()` doesn't allocate (it points to a statically allocated singleton)
 /// * reallocation can be done in place
 /// * `size_of::<ThinVec<T>>()` == `size_of::<Option<ThinVec<T>>>()`
+///   * NOTE: This is only possible when the `unstable` feature is used.
 ///
 /// Properties of Vec that aren't preserved:
 /// * `ThinVec<T>` can't ever be zero-cost roundtripped to a `Box<[T]>`, `String`, or `*mut T`
@@ -240,7 +241,8 @@ impl<T> ThinVec<T> {
     pub fn new() -> ThinVec<T> {
         unsafe {
             ThinVec {
-                ptr: Shared::new_unchecked(&EMPTY_HEADER as *const Header
+                ptr: Shared::new_unchecked(&EMPTY_HEADER
+                                           as *const Header
                                            as *mut Header),
                 boo: PhantomData,
             }
