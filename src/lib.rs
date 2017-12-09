@@ -235,6 +235,7 @@ macro_rules! thin_vec {
         vec.resize($n, $elem);
         vec
     });
+    () => {$crate::ThinVec::new()};
     ($($x:expr),*) => ({
         let len = [$(thin_vec!(@UNIT $x)),*].len();
         let mut vec = $crate::ThinVec::with_capacity(len);
