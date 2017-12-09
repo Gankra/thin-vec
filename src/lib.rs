@@ -92,9 +92,9 @@ fn header_with_capacity<T>(cap: usize) -> Shared<Header> {
     debug_assert!(cap > 0);
     unsafe {
         let header = heap::allocate(
-            alloc_size::<T>(cap), 
+            alloc_size::<T>(cap),
             alloc_align::<T>(),
-        ) as *mut Header; 
+        ) as *mut Header;
 
         if header.is_null() { oom() }
 
@@ -114,11 +114,11 @@ fn header_with_capacity<T>(cap: usize) -> Shared<Header> {
 /// This makes the memory footprint of ThinVecs lower; notably in cases where space is reserved for
 /// a non-existence ThinVec<T>. So `Vec<ThinVec<T>>` and `Option<ThinVec<T>>::None` will waste less
 /// space. Being pointer-sized also means it can be passed/stored in registers.
-/// 
+///
 /// Of course, any actually constructed ThinVec will theoretically have a bigger allocation, but
 /// the fuzzy nature of allocators means that might not actually be the case.
 ///
-/// Properties of Vec that are preserved: 
+/// Properties of Vec that are preserved:
 /// * `ThinVec::new()` doesn't allocate (it points to a statically allocated singleton)
 /// * reallocation can be done in place
 /// * `size_of::<ThinVec<T>>()` == `size_of::<Option<ThinVec<T>>>()`
@@ -240,22 +240,22 @@ impl<T> ThinVec<T> {
 
     pub fn remove(&mut self, idx: usize) -> T {
         let old_len = self.len();
-        
+
         assert!(idx < old_len, "Index out of bounds");
-        
+
         unsafe {
             self.set_len(old_len - 1);
             let ptr = self.data_raw();
             let val = ptr::read(self.data_raw().offset(idx as isize));
             ptr::copy(ptr.offset(idx as isize + 1), ptr.offset(idx as isize),
                       old_len - idx - 1);
-            val            
+            val
         }
     }
 
     pub fn swap_remove(&mut self, idx: usize) -> T {
         let old_len = self.len();
-        
+
         assert!(idx < old_len, "Index out of bounds");
 
         unsafe {
@@ -478,7 +478,7 @@ impl<T> ThinVec<T> {
             new_vec
         }
     }
-    
+
     pub fn append(&mut self, _other: &mut ThinVec<T>) {
         // TODO
         // self.extend(other.drain())
@@ -765,7 +765,7 @@ impl<T> Drop for IntoIter<T> {
             ptr::drop_in_place(&mut vec[self.start..]);
             vec.set_len(0)
         }
-    } 
+    }
 }
 
 /*
