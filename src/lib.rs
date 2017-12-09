@@ -3,7 +3,9 @@
 mod range;
 
 use std::{fmt, ptr, mem, slice};
+use std::collections::Bound;
 use std::iter::FromIterator;
+use std::slice::IterMut;
 use std::ops::{Deref, DerefMut};
 use std::marker::PhantomData;
 use std::cmp::*;
@@ -619,16 +621,44 @@ impl<T> ThinVec<T> {
         }
     }
 
-    pub fn append(&mut self, _other: &mut ThinVec<T>) {
-        // TODO
-        // self.extend(other.drain())
+    pub fn append(&mut self, other: &mut ThinVec<T>) {
+        self.extend(other.drain(..))
     }
 
-    /* TODO: RangeArgument is a pain
-    pub fn drain<R>(&mut self, range: R) -> Drain<T> where R: RangeArgument<usize> {
-        // TODO
+    pub fn drain<R>(&mut self, range: R) -> Drain<T>
+        where R: RangeArgument<usize>
+    {
+        let len = self.len();
+        let start = match range.start() {
+            Bound::Included(&n) => n,
+            Bound::Excluded(&n) => n + 1,
+            Bound::Unbounded => 0,
+        };
+        let end = match range.end() {
+            Bound::Included(&n) => n + 1,
+            Bound::Excluded(&n) => n,
+            Bound::Unbounded => len,
+        };
+        assert!(start <= end);
+        assert!(end <= len);
+
+        unsafe {
+            // Set our length to the start bound
+            self.set_len(start);
+
+            let iter = slice::from_raw_parts_mut(
+                self.data_raw().offset(start as isize),
+                end - start,
+            ).iter_mut();
+
+            Drain {
+                iter: iter,
+                vec: self,
+                end: end,
+                tail: len - end,
+            }
+        }
     }
-    */
 
     unsafe fn deallocate(&mut self) {
         if self.has_allocation() {
@@ -925,14 +955,12 @@ pub struct IntoIter<T> {
     start: usize,
 }
 
-/*
 pub struct Drain<'a, T: 'a> {
-    vec: &'a mut ThinVec<T>,
-    start: usize,
+    iter: IterMut<'a, T>,
+    vec: *mut ThinVec<T>,
     end: usize,
-    // TODO
+    tail: usize,
 }
-*/
 
 impl<T> Iterator for IntoIter<T> {
     type Item = T;
@@ -975,19 +1003,47 @@ impl<T> Drop for IntoIter<T> {
     }
 }
 
-/*
-impl<'a, T> Drop for Drain<'a, T> {
-    fn drop(&mut self) {
-        // TODO
+impl<'a, T> Iterator for Drain<'a, T> {
+    type Item = T;
+    fn next(&mut self) -> Option<T> {
+        self.iter.next().map(|x| unsafe {
+            ptr::read(x)
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
     }
 }
-*/
+
+impl<'a, T> DoubleEndedIterator for Drain<'a, T> {
+    fn next_back(&mut self) -> Option<T> {
+        self.iter.next_back().map(|x| unsafe {
+            ptr::read(x)
+        })
+    }
+}
+
+impl<'a, T> ExactSizeIterator for Drain<'a, T> {}
+
+impl<'a, T> Drop for Drain<'a, T> {
+    fn drop(&mut self) {
+        unsafe {
+            let vec = &mut *self.vec;
+            let old_len = vec.len();
+            let start = vec.data_raw().offset(old_len as isize);
+            let end = vec.data_raw().offset(self.end as isize);
+            ptr::copy(end, start, self.tail);
+            vec.set_len(old_len + self.tail);
+        }
+    }
+}
 
 // TODO: a million Index impls
 
 #[cfg(test)]
 mod tests {
-    use super::ThinVec;
+    use super::{ThinVec, MAX_CAP};
 
     #[test]
     fn test_size_of() {
@@ -1025,5 +1081,77 @@ mod tests {
         assert!(v.has_allocation());
         v = ThinVec::with_capacity(0);
         assert!(!v.has_allocation());
+    }
+
+    #[test]
+    fn test_drain_items() {
+        let mut vec = thin_vec![1, 2, 3];
+        let mut vec2 = thin_vec![];
+        for i in vec.drain(..) {
+            vec2.push(i);
+        }
+        assert_eq!(vec, []);
+        assert_eq!(vec2, [1, 2, 3]);
+    }
+
+    #[test]
+    fn test_drain_items_reverse() {
+        let mut vec = thin_vec![1, 2, 3];
+        let mut vec2 = thin_vec![];
+        for i in vec.drain(..).rev() {
+            vec2.push(i);
+        }
+        assert_eq!(vec, []);
+        assert_eq!(vec2, [3, 2, 1]);
+    }
+
+    #[test]
+    fn test_drain_items_zero_sized() {
+        let mut vec = thin_vec![(), (), ()];
+        let mut vec2 = thin_vec![];
+        for i in vec.drain(..) {
+            vec2.push(i);
+        }
+        assert_eq!(vec, []);
+        assert_eq!(vec2, [(), (), ()]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_drain_out_of_bounds() {
+        let mut v = thin_vec![1, 2, 3, 4, 5];
+        v.drain(5..6);
+    }
+
+    #[test]
+    fn test_drain_range() {
+        let mut v = thin_vec![1, 2, 3, 4, 5];
+        for _ in v.drain(4..) {
+        }
+        assert_eq!(v, &[1, 2, 3, 4]);
+
+        let mut v: ThinVec<_> = (1..6).map(|x| x.to_string()).collect();
+        for _ in v.drain(1..4) {
+        }
+        assert_eq!(v, &[1.to_string(), 5.to_string()]);
+
+        let mut v: ThinVec<_> = (1..6).map(|x| x.to_string()).collect();
+        for _ in v.drain(1..4).rev() {
+        }
+        assert_eq!(v, &[1.to_string(), 5.to_string()]);
+
+        let mut v: ThinVec<_> = thin_vec![(); 5];
+        for _ in v.drain(1..4).rev() {
+        }
+        assert_eq!(v, &[(), ()]);
+    }
+
+    #[test]
+    fn test_drain_max_vec_size() {
+        let mut v = ThinVec::<()>::with_capacity(MAX_CAP);
+        unsafe { v.set_len(MAX_CAP); }
+        for _ in v.drain(MAX_CAP - 1..) {
+        }
+        assert_eq!(v.len(), MAX_CAP - 1);
     }
 }
