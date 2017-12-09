@@ -32,6 +32,19 @@ const AUTO_MASK: u32 = 1 << 31;
 #[cfg(feature = "gecko-ffi")]
 const CAP_MASK: u32 = !AUTO_MASK;
 
+#[cfg(not(feature = "gecko-ffi"))]
+#[inline(always)]
+fn assert_size(x: usize) -> SizeType { x }
+
+#[cfg(feature = "gecko-ffi")]
+#[inline]
+fn assert_size(x: usize) -> SizeType {
+    if x > std::i32::MAX as usize {
+        panic!("nsTArray size may not exceed the capacity of a 32-bit sized int");
+    }
+    x as SizeType
+}
+
 /// The header of a ThinVec
 #[repr(C)]
 struct Header {
@@ -55,14 +68,14 @@ impl Header {
     }
 
     fn set_len(&mut self, len: usize) {
-        self._len = len as SizeType;
+        self._len = assert_size(len);
     }
 
     #[cfg(feature = "gecko-ffi")]
     fn set_cap(&mut self, cap: usize) {
         debug_assert!(cap & (CAP_MASK as usize) == cap);
         debug_assert!(!self.uses_stack_allocated_buffer());
-        self._cap = (cap as SizeType) & CAP_MASK;
+        self._cap = assert_size(cap) & CAP_MASK;
     }
 
     #[cfg(feature = "gecko-ffi")]
@@ -72,7 +85,7 @@ impl Header {
 
     #[cfg(not(feature = "gecko-ffi"))]
     fn set_cap(&mut self, cap: usize) {
-        self._cap = cap as SizeType;
+        self._cap = assert_size(cap);
     }
 
     fn data<T>(&self) -> *mut T {
@@ -131,7 +144,8 @@ fn padding<T>() -> usize {
 
     if alloc_align > header_size {
         if cfg!(feature = "gecko-ffi") {
-            panic!("nsTArray does not handle alignment > 8 correctly");
+            panic!("nsTArray does not handle alignment above > {} correctly",
+                   header_size);
         }
         alloc_align - header_size
     } else {
@@ -183,6 +197,7 @@ fn header_with_capacity<T>(cap: usize) -> Shared<Header> {
 /// * `from_raw_parts` doesn't exist
 /// * ThinVec currently doesn't bother to not-allocate for Zero Sized Types (e.g. `ThinVec<()>`),
 ///   but it could be done if someone cared enough to implement it.
+#[cfg_attr(feature = "gecko-ffi", repr(C))]
 pub struct ThinVec<T> {
     ptr: Shared<Header>,
     boo: PhantomData<T>,
@@ -358,6 +373,7 @@ impl<T> ThinVec<T> {
     /// Panics if the new capacity overflows `usize`.
     ///
     /// Re-allocates only if `self.capacity() < self.len() + additional`.
+    #[cfg(not(feature = "gecko-ffi"))]
     pub fn reserve(&mut self, additional: usize) {
         let len = self.len();
         let old_cap = self.capacity();
@@ -375,6 +391,55 @@ impl<T> ThinVec<T> {
         let new_cap = max(min_cap, double_cap);
         unsafe {
             self.reallocate(new_cap);
+        }
+    }
+
+    /// Reserve capacity for at least `additional` more elements to be inserted.
+    ///
+    /// This method mimics the growth algorithm used by the C++ implementation
+    /// of nsTArray.
+    #[cfg(feature = "gecko-ffi")]
+    pub fn reserve(&mut self, additional: usize) {
+        let elem_size = mem::size_of::<T>();
+
+        let len = self.len();
+        let old_cap = self.capacity();
+        let min_cap = len.checked_add(additional).expect("capacity overflow");
+        if min_cap <= old_cap {
+            return
+        }
+
+        let min_cap_bytes = assert_size(min_cap)
+            .checked_mul(assert_size(elem_size))
+            .and_then(|x| x.checked_add(assert_size(mem::size_of::<Header>())))
+            .unwrap();
+
+        // Perform some checked arithmetic to ensure all of the numbers we
+        // compute will end up in range.
+        let will_fit = min_cap_bytes.checked_mul(2).is_some();
+        if !will_fit {
+            panic!("Exceeded maximum nsTArray size");
+        }
+
+        const SLOW_GROWTH_THRESHOLD: usize = 8 * 1024 * 1024;
+
+        let bytes = if min_cap > SLOW_GROWTH_THRESHOLD {
+            // Grow by a minimum of 1.125x
+            let old_cap_bytes = old_cap * elem_size + mem::size_of::<Header>();
+            let min_growth = old_cap_bytes + (old_cap_bytes >> 3);
+            let growth = max(min_growth, min_cap_bytes as usize);
+
+            // Round up to the next megabyte.
+            const MB: usize = 1 << 20;
+            MB * ((growth + MB - 1) / MB)
+        } else {
+            // Try to allocate backing buffers in powers of two.
+            min_cap_bytes.next_power_of_two() as usize
+        };
+
+        let cap = (bytes - std::mem::size_of::<Header>()) / elem_size;
+        unsafe {
+            self.reallocate(cap);
         }
     }
 

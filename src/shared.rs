@@ -5,6 +5,7 @@
 use std::marker::PhantomData;
 
 /// See `::std::ptr::Shared`
+#[repr(C)]
 pub struct Shared<T: ?Sized> {
     p: *mut T,
     _pd: PhantomData<T>,
