@@ -33,13 +33,18 @@ const AUTO_MASK: u32 = 1 << 31;
 const CAP_MASK: u32 = !AUTO_MASK;
 
 #[cfg(not(feature = "gecko-ffi"))]
+const MAX_CAP: usize = !0;
+#[cfg(feature = "gecko-ffi")]
+const MAX_CAP: usize = i32::max_value() as usize;
+
+#[cfg(not(feature = "gecko-ffi"))]
 #[inline(always)]
 fn assert_size(x: usize) -> SizeType { x }
 
 #[cfg(feature = "gecko-ffi")]
 #[inline]
 fn assert_size(x: usize) -> SizeType {
-    if x > std::i32::MAX as usize {
+    if x > MAX_CAP as usize {
         panic!("nsTArray size may not exceed the capacity of a 32-bit sized int");
     }
     x as SizeType
@@ -168,7 +173,7 @@ fn header_with_capacity<T>(cap: usize) -> Shared<Header> {
         if header.is_null() { oom() }
 
         // "Infinite" capacity for zero-sized types:
-        (*header).set_cap(if mem::size_of::<T>() == 0 { !0 } else { cap });
+        (*header).set_cap(if mem::size_of::<T>() == 0 { MAX_CAP } else { cap });
         (*header).set_len(0);
 
         Shared::new_unchecked(header)
