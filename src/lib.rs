@@ -805,9 +805,57 @@ impl<T> Ord for ThinVec<T> where T: Ord {
     }
 }
 
-impl<T, U> PartialEq<U> for ThinVec<T> where U: for<'a> PartialEq<&'a [T]> {
-    fn eq(&self, other: &U) -> bool { *other == &self[..] }
-    fn ne(&self, other: &U) -> bool { *other != &self[..] }
+impl<A, B> PartialEq<ThinVec<B>> for ThinVec<A> where A: PartialEq<B> {
+    #[inline]
+    fn eq(&self, other: &ThinVec<B>) -> bool { self[..] == other[..] }
+    #[inline]
+    fn ne(&self, other: &ThinVec<B>) -> bool { self[..] != other[..] }
+}
+
+impl<A, B> PartialEq<Vec<B>> for ThinVec<A> where A: PartialEq<B> {
+    #[inline]
+    fn eq(&self, other: &Vec<B>) -> bool { self[..] == other[..] }
+    #[inline]
+    fn ne(&self, other: &Vec<B>) -> bool { self[..] != other[..] }
+}
+
+impl<A, B> PartialEq<[B]> for ThinVec<A> where A: PartialEq<B> {
+    #[inline]
+    fn eq(&self, other: &[B]) -> bool { self[..] == other[..] }
+    #[inline]
+    fn ne(&self, other: &[B]) -> bool { self[..] != other[..] }
+}
+
+impl<'a, A, B> PartialEq<&'a [B]> for ThinVec<A> where A: PartialEq<B> {
+    #[inline]
+    fn eq(&self, other: &&'a [B]) -> bool { self[..] == other[..] }
+    #[inline]
+    fn ne(&self, other: &&'a [B]) -> bool { self[..] != other[..] }
+}
+
+macro_rules! array_impls {
+    ($($N:expr)*) => {$(
+        impl<A, B> PartialEq<[B; $N]> for ThinVec<A> where A: PartialEq<B> {
+            #[inline]
+            fn eq(&self, other: &[B; $N]) -> bool { self[..] == other[..] }
+            #[inline]
+            fn ne(&self, other: &[B; $N]) -> bool { self[..] != other[..] }
+        }
+
+        impl<'a, A, B> PartialEq<&'a [B; $N]> for ThinVec<A> where A: PartialEq<B> {
+            #[inline]
+            fn eq(&self, other: &&'a [B; $N]) -> bool { self[..] == other[..] }
+            #[inline]
+            fn ne(&self, other: &&'a [B; $N]) -> bool { self[..] != other[..] }
+        }
+    )*}
+}
+
+array_impls! {
+    0  1  2  3  4  5  6  7  8  9
+    10 11 12 13 14 15 16 17 18 19
+    20 21 22 23 24 25 26 27 28 29
+    30 31 32
 }
 
 impl<T> Eq for ThinVec<T> where T: Eq {}
@@ -917,7 +965,6 @@ impl<'a, T> Drop for Drain<'a, T> {
 */
 
 // TODO: a million Index impls
-// TODO?: a million Cmp<[T; n]> impls
 
 #[cfg(test)]
 mod tests {
