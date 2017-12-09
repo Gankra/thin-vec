@@ -223,18 +223,20 @@ pub struct ThinVec<T> {
 /// ```
 #[macro_export]
 macro_rules! thin_vec {
+    (@UNIT $($t:tt)*) => (());
+
     ($elem:expr; $n:expr) => ({
         let mut vec = $crate::ThinVec::new();
         vec.resize($n, $elem);
         vec
     });
     ($($x:expr),*) => ({
-        // TODO: Change this to work without cloning the elements.
-        let mut vec = $crate::ThinVec::new();
-        vec.extend_from_slice(&[$($x),*]);
+        let len = [$(thin_vec!(@UNIT $x)),*].len();
+        let mut vec = $crate::ThinVec::with_capacity(len);
+        $(vec.push($x);)*
         vec
     });
-    ($($x:expr,)*) => (thin_vec![$($x),*])
+    ($($x:expr,)*) => (thin_vec![$($x),*]);
 }
 
 impl<T> ThinVec<T> {
