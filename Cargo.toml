@@ -3,4 +3,8 @@ name = "thin-vec"
 version = "0.1.0"
 authors = ["Alexis Beingessner <a.beingessner@gmail.com>"]
 
+[features]
+defeault = []
+gecko-ffi = []
+
 [dependencies]

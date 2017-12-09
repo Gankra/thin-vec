@@ -2,6 +2,8 @@
 
 extern crate alloc;
 
+mod range;
+
 use std::{fmt, ptr, mem, slice};
 use std::ops::{Deref, DerefMut};
 use alloc::heap;
@@ -10,9 +12,11 @@ use std::cmp::*;
 use std::hash::*;
 use std::borrow::*;
 use std::ptr::Shared;
+use range::RangeArgument;
 
 
 /// The header of a ThinVec
+#[repr(C)]
 struct Header {
     len: usize,
     cap: usize,
