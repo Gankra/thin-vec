@@ -25,11 +25,27 @@ use shared::Shared;
 /// The header of a ThinVec
 #[repr(C)]
 struct Header {
-    len: usize,
-    cap: usize,
+    _len: usize,
+    _cap: usize,
 }
 
 impl Header {
+    fn len(&self) -> usize {
+        self._len
+    }
+
+    fn cap(&self) -> usize {
+        self._cap
+    }
+
+    fn set_len(&mut self, len: usize) {
+        self._len = len;
+    }
+
+    fn set_cap(&mut self, cap: usize) {
+        self._cap = cap;
+    }
+
     fn data<T>(&self) -> *mut T {
         let header_size = mem::size_of::<Header>();
         let padding = padding::<T>();
@@ -52,7 +68,7 @@ impl Header {
 /// optimize everything to not do that (basically, make ptr == len and branch
 /// on size == 0 in every method), but it's a bunch of work for something that
 /// doesn't matter much.
-static EMPTY_HEADER: Header = Header { len: 0, cap: 0 };
+static EMPTY_HEADER: Header = Header { _len: 0, _cap: 0 };
 
 
 // TODO: overflow checks everywhere
@@ -78,6 +94,9 @@ fn padding<T>() -> usize {
     let header_size = mem::size_of::<Header>();
 
     if alloc_align > header_size {
+        if cfg!(feature = "gecko-ffi") {
+            panic!("nsTArray does not handle alignment > 8 correctly");
+        }
         alloc_align - header_size
     } else {
         0
@@ -99,8 +118,8 @@ fn header_with_capacity<T>(cap: usize) -> Shared<Header> {
         if header.is_null() { oom() }
 
         // "Infinite" capacity for zero-sized types:
-        (*header).cap = if mem::size_of::<T>() == 0 { !0 } else { cap };
-        (*header).len = 0;
+        (*header).set_cap(if mem::size_of::<T>() == 0 { !0 } else { cap });
+        (*header).set_len(0);
 
         Shared::new_unchecked(header)
     }
@@ -197,10 +216,10 @@ impl<T> ThinVec<T> {
     // This is unsafe when the header is EMPTY_HEADER.
     unsafe fn header_mut(&mut self) -> &mut Header { &mut *self.ptr() }
 
-    pub fn len(&self) -> usize { self.header().len }
+    pub fn len(&self) -> usize { self.header().len() }
     pub fn is_empty(&self) -> bool { self.len() == 0 }
-    pub fn capacity(&self) -> usize { self.header().cap }
-    pub unsafe fn set_len(&mut self, len: usize) { self.header_mut().len = len }
+    pub fn capacity(&self) -> usize { self.header().cap() }
+    pub unsafe fn set_len(&mut self, len: usize) { self.header_mut().set_len(len) }
 
     pub fn push(&mut self, val: T) {
         let old_len = self.len();
@@ -509,7 +528,7 @@ impl<T> ThinVec<T> {
                                        alloc_size::<T>(new_cap),
                                        alloc_align::<T>()) as *mut Header;
             if ptr.is_null() { oom() }
-            (*ptr).cap = new_cap;
+            (*ptr).set_cap(new_cap);
             self.ptr = Shared::new_unchecked(ptr);
         } else {
             self.ptr = header_with_capacity::<T>(new_cap);
