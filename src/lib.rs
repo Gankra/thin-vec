@@ -1028,6 +1028,10 @@ impl<'a, T> ExactSizeIterator for Drain<'a, T> {}
 
 impl<'a, T> Drop for Drain<'a, T> {
     fn drop(&mut self) {
+        // Consume the rest of the iterator.
+        while let Some(_) = self.next() {}
+
+        // Move the tail over the drained items, and update the length.
         unsafe {
             let vec = &mut *self.vec;
             let old_len = vec.len();
