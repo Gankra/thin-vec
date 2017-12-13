@@ -4,7 +4,15 @@ version = "0.1.0"
 authors = ["Alexis Beingessner <a.beingessner@gmail.com>"]
 
 [features]
-defeault = []
+unstable = []
+default = []
+
+# Gecko specific features. These features cause thin-vec to have the same layout
+# and behaviour as nsTArray, allowing it to be used in C++ FFI.
 gecko-ffi = []
+# gecko-internal can only be enabled when linked into gecko. It causes the empty
+# header singleton to be shared between C++ and rust code.
+gecko-internal = ["gecko-ffi"]
 
 [dependencies]
+libc = "0.2"
