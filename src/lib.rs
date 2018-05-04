@@ -1,5 +1,3 @@
-#![cfg_attr(feature = "unstable", feature(shared))]
-
 mod range;
 
 use std::{fmt, ptr, mem, slice};
@@ -12,18 +10,11 @@ use std::cmp::*;
 use std::hash::*;
 use std::borrow::*;
 use range::RangeArgument;
+use std::ptr::NonNull;
 
 // Heap shimming because reasons. This doesn't unfortunately match the heap api
 // right now because reasons.
 mod heap;
-
-// Shared shimming because reasons.
-#[cfg(feature = "unstable")]
-use std::ptr::Shared;
-#[cfg(not(feature = "unstable"))]
-mod shared;
-#[cfg(not(feature = "unstable"))]
-use shared::Shared;
 
 #[cfg(not(feature = "gecko-ffi"))]
 type SizeType = usize;
@@ -165,7 +156,7 @@ fn alloc_align<T>() -> usize {
     max(mem::align_of::<T>(), mem::align_of::<Header>())
 }
 
-fn header_with_capacity<T>(cap: usize) -> Shared<Header> {
+fn header_with_capacity<T>(cap: usize) -> NonNull<Header> {
     debug_assert!(cap > 0);
     unsafe {
         let header = heap::allocate(
@@ -179,7 +170,7 @@ fn header_with_capacity<T>(cap: usize) -> Shared<Header> {
         (*header).set_cap(if mem::size_of::<T>() == 0 { MAX_CAP } else { cap });
         (*header).set_len(0);
 
-        Shared::new_unchecked(header)
+        NonNull::new_unchecked(header)
     }
 }
 
@@ -208,7 +199,7 @@ fn header_with_capacity<T>(cap: usize) -> Shared<Header> {
 ///   but it could be done if someone cared enough to implement it.
 #[cfg_attr(feature = "gecko-ffi", repr(C))]
 pub struct ThinVec<T> {
-    ptr: Shared<Header>,
+    ptr: NonNull<Header>,
     boo: PhantomData<T>,
 }
 
@@ -252,7 +243,7 @@ impl<T> ThinVec<T> {
     pub fn new() -> ThinVec<T> {
         unsafe {
             ThinVec {
-                ptr: Shared::new_unchecked(&EMPTY_HEADER
+                ptr: NonNull::new_unchecked(&EMPTY_HEADER
                                            as *const Header
                                            as *mut Header),
                 boo: PhantomData,
@@ -680,7 +671,7 @@ impl<T> ThinVec<T> {
                                        alloc_align::<T>()) as *mut Header;
             if ptr.is_null() { oom() }
             (*ptr).set_cap(new_cap);
-            self.ptr = Shared::new_unchecked(ptr);
+            self.ptr = NonNull::new_unchecked(ptr);
         } else {
             self.ptr = header_with_capacity::<T>(new_cap);
         }
