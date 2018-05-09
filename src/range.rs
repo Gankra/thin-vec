@@ -8,45 +8,11 @@ pub trait RangeArgument<T: ?Sized> {
     /// Start index bound.
     ///
     /// Returns the start value as a `Bound`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// #![feature(alloc)]
-    /// #![feature(collections_range)]
-    ///
-    /// extern crate alloc;
-    ///
-    /// # fn main() {
-    /// use alloc::range::RangeArgument;
-    /// use alloc::Bound::*;
-    ///
-    /// assert_eq!((..10).start(), Unbounded);
-    /// assert_eq!((3..10).start(), Included(&3));
-    /// # }
-    /// ```
     fn start(&self) -> Bound<&T>;
 
     /// End index bound.
     ///
     /// Returns the end value as a `Bound`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// #![feature(alloc)]
-    /// #![feature(collections_range)]
-    ///
-    /// extern crate alloc;
-    ///
-    /// # fn main() {
-    /// use alloc::range::RangeArgument;
-    /// use alloc::Bound::*;
-    ///
-    /// assert_eq!((3..).end(), Unbounded);
-    /// assert_eq!((3..10).end(), Excluded(&10));
-    /// # }
-    /// ```
     fn end(&self) -> Bound<&T>;
 }
 

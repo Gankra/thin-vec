@@ -94,9 +94,9 @@ impl Header {
         let ptr = self as *const Header as *mut Header as *mut u8;
 
         unsafe {
-            if padding > 0 {
-                // Don't do `GEP [inbounds]` for high alignment so EMPTY_HEADER is safe
-                ptr.wrapping_offset((header_size + padding) as isize) as *mut T
+            if padding > 0 && self.len() == 0 {
+                // The empty header isn't well-aligned, just make an aligned one up
+                NonNull::dangling().as_ptr()
             } else {
                 ptr.offset(header_size as isize) as *mut T
             }
