@@ -1,6 +1,6 @@
 mod range;
 
-use std::{fmt, ptr, mem, slice};
+use std::{fmt, io, ptr, mem, slice};
 use std::collections::Bound;
 use std::iter::FromIterator;
 use std::slice::IterMut;
@@ -1032,6 +1032,26 @@ impl<'a, T> Drop for Drain<'a, T> {
             vec.set_len(old_len + self.tail);
         }
     }
+}
+
+/// Write is implemented for `ThinVec<u8>` by appending to the vector.
+/// The vector will grow as needed.
+/// This implementation is identical to the one for `Vec<u8>`.
+impl io::Write for ThinVec<u8> {
+    #[inline]
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    #[inline]
+    fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
+        self.extend_from_slice(buf);
+        Ok(())
+    }
+
+    #[inline]
+    fn flush(&mut self) -> io::Result<()> { Ok(()) }
 }
 
 // TODO: a million Index impls
