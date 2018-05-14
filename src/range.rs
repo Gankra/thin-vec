@@ -1,4 +1,3 @@
-
 use std::ops::{RangeFull, Range, RangeTo, RangeFrom};
 use std::collections::Bound::{self, Excluded, Included, Unbounded};
 
@@ -53,6 +52,26 @@ impl<T> RangeArgument<T> for Range<T> {
         Excluded(&self.end)
     }
 }
+
+/* ~one day~
+impl<T> RangeArgument<T> for RangeToInclusive<T> {
+    fn start(&self) -> Bound<&T> {
+        Unbounded
+    }
+    fn end(&self) -> Bound<&T> {
+        Included(&self.end)
+    }
+}
+
+impl<T> RangeArgument<T> for RangeInclusive<T> {
+    fn start(&self) -> Bound<&T> {
+        Included(&self.start)
+    }
+    fn end(&self) -> Bound<&T> {
+        Included(&self.end)
+    }
+}
+*/
 
 impl<T> RangeArgument<T> for (Bound<T>, Bound<T>) {
     fn start(&self) -> Bound<&T> {
