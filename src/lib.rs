@@ -73,7 +73,8 @@ impl Header {
     #[cfg(feature = "gecko-ffi")]
     fn set_cap(&mut self, cap: usize) {
         debug_assert!(cap & (CAP_MASK as usize) == cap);
-        debug_assert!(!self.uses_stack_allocated_buffer());
+        // FIXME: this is busted because it reads uninit memory
+        // debug_assert!(!self.uses_stack_allocated_buffer());
         self._cap = assert_size(cap) & CAP_MASK;
     }
 
@@ -109,15 +110,14 @@ impl Header {
 /// optimize everything to not do that (basically, make ptr == len and branch
 /// on size == 0 in every method), but it's a bunch of work for something that
 /// doesn't matter much.
-#[cfg(not(feature = "gecko-internal"))]
+#[cfg(any(not(feature = "gecko-ffi"), test))]
 static EMPTY_HEADER: Header = Header { _len: 0, _cap: 0 };
 
-#[cfg(feature = "gecko-internal")]
+#[cfg(all(feature = "gecko-ffi", not(test)))]
 extern {
     #[link_name = "sEmptyTArrayHeader"]
     static EMPTY_HEADER: Header;
 }
-
 
 // TODO: overflow checks everywhere
 
@@ -559,8 +559,6 @@ impl<T> ThinVec<T> {
     /// ```
     /// # #[macro_use] extern crate thin_vec;
     /// # fn main() {
-    /// use std::ascii::AsciiExt;
-    ///
     /// let mut vec = thin_vec!["foo", "bar", "Bar", "baz", "bar"];
     ///
     /// vec.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
@@ -1274,7 +1272,6 @@ mod std_tests {
     fn test_extend() {
         let mut v = ThinVec::<usize>::new();
         let mut w = ThinVec::new();
-        w.clone();
         v.extend(w.clone());
         assert_eq!(v, &[]);
 
@@ -1316,7 +1313,7 @@ mod std_tests {
         assert_eq!(count_x, 1);
     }
 
-/*
+/* TODO: implement extend for Iter<&Copy>
     #[test]
     fn test_extend_ref() {
         let mut v = thin_vec![1, 2];
@@ -1728,7 +1725,7 @@ mod std_tests {
         assert_eq!(v, &[(), ()]);
     }
 
-/*
+/* TODO: support inclusive ranges
     #[test]
     fn test_drain_inclusive_range() {
         let mut v = thin_vec!['a', 'b', 'c', 'd', 'e'];
@@ -1780,7 +1777,7 @@ mod std_tests {
     }
 */
 
-/*
+/* TODO: implement splice?
     #[test]
     fn test_splice() {
         let mut v = thin_vec![1, 2, 3, 4, 5];
@@ -1845,7 +1842,7 @@ mod std_tests {
     }
 */
 
-/*
+/* probs won't ever impl this
     #[test]
     fn test_into_boxed_slice() {
         let xs = thin_vec![1, 2, 3];
@@ -1871,7 +1868,7 @@ mod std_tests {
         assert_eq!(vec2, [5, 6]);
     }
 
-/*
+/* TODO: implement into_iter methods?
     #[test]
     fn test_into_iter_as_slice() {
         let vec = thin_vec!['a', 'b', 'c'];
@@ -1927,7 +1924,7 @@ mod std_tests {
     }
 */
 
-/*
+/* TODO: implement CoW interop?
     #[test]
     fn test_cow_from() {
         let borrowed: &[_] = &["borrowed", "(slice)"];
@@ -1977,7 +1974,7 @@ mod std_tests {
     }
 */
 
-/*
+/* TODO: implement higher than 16 alignment
     #[test]
     fn overaligned_allocations() {
         #[repr(align(256))]
@@ -2183,7 +2180,8 @@ mod std_tests {
         v.reserve_exact(16);
         assert!(v.capacity() >= 33)
     }
-/*
+
+/* TODO: implement try_reserve 
     #[test]
     fn test_try_reserve() {
 
