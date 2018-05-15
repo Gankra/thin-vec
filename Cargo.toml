@@ -2,6 +2,11 @@
 name = "thin-vec"
 version = "0.1.0"
 authors = ["Alexis Beingessner <a.beingessner@gmail.com>"]
+description = "a vec that takes up less space on the stack"
+license = "MIT/Apache-2.0"
+repository = "https://github.com/gankro/thin-vec"
+homepage = "https://github.com/gankro/thin-vec"
+readme = "README.md"
 
 [features]
 unstable = []
