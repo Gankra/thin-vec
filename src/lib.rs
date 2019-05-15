@@ -1096,10 +1096,7 @@ mod tests {
         use std::mem::size_of;
         assert_eq!(size_of::<ThinVec<u8>>(), size_of::<&u8>());
 
-        // We don't perform the null-pointer optimization on stable rust.
-        if cfg!(feature = "unstable") {
-            assert_eq!(size_of::<Option<ThinVec<u8>>>(), size_of::<&u8>());
-        }
+        assert_eq!(size_of::<Option<ThinVec<u8>>>(), size_of::<&u8>());
     }
 
     #[test]
