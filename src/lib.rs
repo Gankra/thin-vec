@@ -1,15 +1,12 @@
-mod range;
-
 use std::{fmt, io, ptr, mem, slice};
 use std::collections::Bound;
 use std::iter::FromIterator;
 use std::slice::IterMut;
-use std::ops::{Deref, DerefMut};
+use std::ops::{Deref, DerefMut, RangeBounds};
 use std::marker::PhantomData;
 use std::cmp::*;
 use std::hash::*;
 use std::borrow::*;
-use range::RangeArgument;
 use std::ptr::NonNull;
 
 // Heap shimming because reasons. This doesn't unfortunately match the heap api
@@ -627,15 +624,15 @@ impl<T> ThinVec<T> {
     }
 
     pub fn drain<R>(&mut self, range: R) -> Drain<T>
-        where R: RangeArgument<usize>
+        where R: RangeBounds<usize>
     {
         let len = self.len();
-        let start = match range.start() {
+        let start = match range.start_bound() {
             Bound::Included(&n) => n,
             Bound::Excluded(&n) => n + 1,
             Bound::Unbounded => 0,
         };
-        let end = match range.end() {
+        let end = match range.end_bound() {
             Bound::Included(&n) => n + 1,
             Bound::Excluded(&n) => n,
             Bound::Unbounded => len,
@@ -1725,7 +1722,6 @@ mod std_tests {
         assert_eq!(v, &[(), ()]);
     }
 
-/* TODO: support inclusive ranges
     #[test]
     fn test_drain_inclusive_range() {
         let mut v = thin_vec!['a', 'b', 'c', 'd', 'e'];
@@ -1775,7 +1771,6 @@ mod std_tests {
         let mut v = thin_vec![1, 2, 3, 4, 5];
         v.drain(5..=5);
     }
-*/
 
 /* TODO: implement splice?
     #[test]
@@ -2181,7 +2176,7 @@ mod std_tests {
         assert!(v.capacity() >= 33)
     }
 
-/* TODO: implement try_reserve 
+/* TODO: implement try_reserve
     #[test]
     fn test_try_reserve() {
 
