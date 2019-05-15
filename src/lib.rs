@@ -121,9 +121,7 @@ extern {
 
 // TODO: overflow checks everywhere
 
-// Utils
-
-fn oom() -> ! { std::process::abort() }
+// Utils for computing layouts of allocations
 
 fn alloc_size<T>(cap: usize) -> usize {
     // Compute "real" header size with pointer math
@@ -168,9 +166,10 @@ fn layout<T>(cap: usize) -> Layout {
 fn header_with_capacity<T>(cap: usize) -> NonNull<Header> {
     debug_assert!(cap > 0);
     unsafe {
-        let header = alloc(layout::<T>(cap)) as *mut Header;
+        let layout = layout::<T>(cap);
+        let header = alloc(layout) as *mut Header;
 
-        if header.is_null() { oom() }
+        if header.is_null() { handle_alloc_error(layout) }
 
         // "Infinite" capacity for zero-sized types:
         (*header).set_cap(if mem::size_of::<T>() == 0 { MAX_CAP } else { cap });
@@ -691,7 +690,7 @@ impl<T> ThinVec<T> {
                 alloc_size::<T>(new_cap),
             ) as *mut Header;
 
-            if ptr.is_null() { oom() }
+            if ptr.is_null() { handle_alloc_error(layout::<T>(new_cap)) }
             (*ptr).set_cap(new_cap);
             self.ptr = NonNull::new_unchecked(ptr);
         } else {
