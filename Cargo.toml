@@ -18,4 +18,3 @@ default = []
 gecko-ffi = []
 
 [dependencies]
-libc = "0.2"
