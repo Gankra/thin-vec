@@ -9,36 +9,39 @@ use std::hash::*;
 use std::borrow::*;
 use std::ptr::NonNull;
 
+use impl_details::*;
+
 // Heap shimming because reasons. This doesn't unfortunately match the heap api
 // right now because reasons.
 mod heap;
 
-#[cfg(not(feature = "gecko-ffi"))]
-type SizeType = usize;
-#[cfg(feature = "gecko-ffi")]
-type SizeType = u32;
-
-#[cfg(feature = "gecko-ffi")]
-const AUTO_MASK: u32 = 1 << 31;
-#[cfg(feature = "gecko-ffi")]
-const CAP_MASK: u32 = !AUTO_MASK;
+// modules: a simple way to cfg a whole bunch of impl details at once
 
 #[cfg(not(feature = "gecko-ffi"))]
-const MAX_CAP: usize = !0;
-#[cfg(feature = "gecko-ffi")]
-const MAX_CAP: usize = i32::max_value() as usize;
+mod impl_details {
+    pub type SizeType = usize;
+    pub const MAX_CAP: usize = !0;
 
-#[cfg(not(feature = "gecko-ffi"))]
-#[inline(always)]
-fn assert_size(x: usize) -> SizeType { x }
+    #[inline(always)]
+    pub fn assert_size(x: usize) -> SizeType { x }
+}
 
 #[cfg(feature = "gecko-ffi")]
-#[inline]
-fn assert_size(x: usize) -> SizeType {
-    if x > MAX_CAP as usize {
-        panic!("nsTArray size may not exceed the capacity of a 32-bit sized int");
+mod impl_details {
+    pub const AUTO_MASK: u32 = 1 << 31;
+    pub const CAP_MASK: u32 = !AUTO_MASK;
+
+    pub type SizeType = u32;
+    const MAX_CAP: usize = i32::max_value() as usize;
+
+    #[inline]
+    pub fn assert_size(x: usize) -> SizeType {
+        if x > MAX_CAP as usize {
+            panic!("nsTArray size may not exceed the capacity of a 32-bit sized int");
+        }
+        x as SizeType
     }
-    x as SizeType
+
 }
 
 /// The header of a ThinVec
@@ -53,36 +56,8 @@ impl Header {
         self._len as usize
     }
 
-    #[cfg(feature = "gecko-ffi")]
-    fn cap(&self) -> usize {
-        (self._cap & CAP_MASK) as usize
-    }
-
-    #[cfg(not(feature = "gecko-ffi"))]
-    fn cap(&self) -> usize {
-        self._cap as usize
-    }
-
     fn set_len(&mut self, len: usize) {
         self._len = assert_size(len);
-    }
-
-    #[cfg(feature = "gecko-ffi")]
-    fn set_cap(&mut self, cap: usize) {
-        debug_assert!(cap & (CAP_MASK as usize) == cap);
-        // FIXME: this is busted because it reads uninit memory
-        // debug_assert!(!self.uses_stack_allocated_buffer());
-        self._cap = assert_size(cap) & CAP_MASK;
-    }
-
-    #[cfg(feature = "gecko-ffi")]
-    fn uses_stack_allocated_buffer(&self) -> bool {
-        self._cap & AUTO_MASK != 0
-    }
-
-    #[cfg(not(feature = "gecko-ffi"))]
-    fn set_cap(&mut self, cap: usize) {
-        self._cap = assert_size(cap);
     }
 
     fn data<T>(&self) -> *mut T {
@@ -101,6 +76,37 @@ impl Header {
         }
     }
 }
+
+
+#[cfg(feature = "gecko-ffi")]
+impl Header {
+    fn cap(&self) -> usize {
+        (self._cap & CAP_MASK) as usize
+    }
+
+    fn set_cap(&mut self, cap: usize) {
+        debug_assert!(cap & (CAP_MASK as usize) == cap);
+        // FIXME: this is busted because it reads uninit memory
+        // debug_assert!(!self.uses_stack_allocated_buffer());
+        self._cap = assert_size(cap) & CAP_MASK;
+    }
+
+    fn uses_stack_allocated_buffer(&self) -> bool {
+        self._cap & AUTO_MASK != 0
+    }
+}
+
+#[cfg(not(feature = "gecko-ffi"))]
+impl Header {
+    fn cap(&self) -> usize {
+        self._cap as usize
+    }
+
+    fn set_cap(&mut self, cap: usize) {
+        self._cap = assert_size(cap);
+    }
+}
+
 
 /// Singleton that all empty collections share.
 /// Note: can't store non-zero ZSTs, we allocate in that case. We could
@@ -194,7 +200,7 @@ fn header_with_capacity<T>(cap: usize) -> NonNull<Header> {
 /// * `from_raw_parts` doesn't exist
 /// * ThinVec currently doesn't bother to not-allocate for Zero Sized Types (e.g. `ThinVec<()>`),
 ///   but it could be done if someone cared enough to implement it.
-#[cfg_attr(feature = "gecko-ffi", repr(C))]
+#[repr(C)]
 pub struct ThinVec<T> {
     ptr: NonNull<Header>,
     boo: PhantomData<T>,
