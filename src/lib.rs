@@ -12,6 +12,147 @@ use std::ptr::NonNull;
 
 use impl_details::*;
 
+/// ThinVec is exactly the same as Vec, except that it stores its `len` and `capacity` in the buffer
+/// it allocates.
+///
+/// This makes the memory footprint of ThinVecs lower; notably in cases where space is reserved for
+/// a non-existence ThinVec<T>. So `Vec<ThinVec<T>>` and `Option<ThinVec<T>>::None` will waste less
+/// space. Being pointer-sized also means it can be passed/stored in registers.
+///
+/// Of course, any actually constructed ThinVec will theoretically have a bigger allocation, but
+/// the fuzzy nature of allocators means that might not actually be the case.
+///
+/// Properties of Vec that are preserved:
+/// * `ThinVec::new()` doesn't allocate (it points to a statically allocated singleton)
+/// * reallocation can be done in place
+/// * `size_of::<ThinVec<T>>()` == `size_of::<Option<ThinVec<T>>>()`
+///
+/// Properties of Vec that aren't preserved:
+/// * `ThinVec<T>` can't ever be zero-cost roundtripped to a `Box<[T]>`, `String`, or `*mut T`
+/// * `from_raw_parts` doesn't exist
+/// * ThinVec currently doesn't bother to not-allocate for Zero Sized Types (e.g. `ThinVec<()>`),
+///   but it could be done if someone cared enough to implement it.
+///
+///
+///
+/// # Gecko FFI
+///
+/// If you enable the gecko-ffi feature, ThinVec will verbatim bridge with the nsTArray type in
+/// Gecko (Firefox). That is, ThinVec and nsTArray have identical layouts *but not ABIs*, 
+/// so nsTArrays/ThinVecs an be natively manipulated by C++ and Rust, and ownership can be 
+/// transferred across the FFI boundary (**IF YOU ARE CAREFUL, SEE BELOW!!**).
+///
+/// While this feature is handy, it is also inherently dangerous to use because Rust and C++ do not
+/// know about eachother. Specifically, this can be an issue with non-POD types (types which
+/// have destructors, move constructors, or are `!Copy`).
+///
+/// ## Do Not Pass By Value
+///
+/// The biggest thing to keep in mind is that **FFI functions cannot pass ThinVec/nsTArray 
+/// by-value**. That is, these are busted APIs:
+///
+/// ```rust,ignore
+/// // BAD WRONG
+/// extern fn process_data(data: ThinVec<u32>) { ... }
+/// // BAD WRONG
+/// extern fn get_data() -> ThinVec<u32> { ... }
+/// ```
+///
+/// You must instead pass by-reference:
+///
+/// ```rust
+/// # use thin_vec::*;
+/// # use std::mem;
+///
+/// // Read-only access, ok!
+/// extern fn process_data(data: &ThinVec<u32>) {
+///     for val in data {
+///         println!("{}", val);
+///     }
+/// }
+/// 
+/// // Replace with empty instance to take ownership, ok!
+/// extern fn consume_data(data: &mut ThinVec<u32>) {
+///     let owned = mem::replace(data, ThinVec::new());
+///     mem::drop(owned);
+/// }
+/// 
+/// // Mutate input, ok!
+/// extern fn add_data(dataset: &mut ThinVec<u32>) {
+///     dataset.push(37);
+///     dataset.push(12);
+/// }
+/// 
+/// // Return via out-param, usually ok!
+/// //
+/// // WARNING: output must be initialized! (Empty nsTArrays are free, so just do it!)
+/// extern fn get_data(output: &mut ThinVec<u32>) {
+///     *output = thin_vec![1, 2, 3, 4, 5];
+/// }
+/// ```
+///
+/// Ignorable Explanation For Those Who Really Want To Know Why:
+///
+/// > The fundamental issue is that Rust and C++ can't currently communicate about destructors, and
+/// > the semantics of C++ require destructors of function arguments to be run when the function
+/// > returns. Whether the callee or caller is responsible for this is also platform-specific, so
+/// > trying to hack around it manually would be messy. 
+/// >
+/// > Also a type having a destructor changes its C++ ABI, because that type must actually exist 
+/// > in memory (unlike a trivial struct, which is often passed in registers). We don't currently
+/// > have a way to communicate to Rust that this is happening, so even if we worked out the
+/// > destructor issue with say, MaybeUninit, it would still be a non-starter without some RFCs
+/// > to add explicit rustc support.
+/// >
+/// > Realistically, the best answer here is to have a "heavier" bindgen that can secretly
+/// > generate FFI glue so we can pass things "by value" and have it generate by-reference code
+/// > behind our back (like the cxx crate does). This would muddy up debugging/searchfox though.
+///
+/// ## Types Should Be Trivially Relocatable
+///
+/// Types in Rust are always trivially relocatable (unless suitably borrowed/[pinned][]/hidden).
+/// This means all Rust types are legal to relocate with a bitwise copy, you cannot provide
+/// copy or move constructors to execute when this happens, and the old location won't have its
+/// destructor run. This will cause problems for types which have a significant location
+/// (types that intrusively point into themselves or have their location registered with a service).
+///
+/// While relocations are generally predictable if you're very careful, **you should avoid using
+/// types with significant locations with Rust FFI**.
+///
+/// Specifically, ThinVec will trivially relocate its contents whenever it needs to reallocate its
+/// buffer to change its capacity. This is the default reallocation strategy for nsTArray, and is
+/// suitable for the vast majority of types. Just be aware of this limitation!
+///
+/// ## Auto Arrays Are Dangerous
+///
+/// ThinVec has *some* support for handling auto arrays which store their buffer on the stack, 
+/// but this isn't well tested.
+///
+/// Regardless of how much support we provide, Rust won't be aware of the buffer's limited lifetime,
+/// so standard auto array safety caveats apply about returning/storing them! ThinVec won't ever
+/// produce an auto array on its own, so this is only an issue for transferring an nsTArray into
+/// Rust.
+///
+/// ## Other Issues
+///
+/// Standard FFI caveats also apply: 
+///
+///  * Rust is more strict about POD types being initialized (use MaybeUninit if you must)
+///  * `ThinVec<T>` has no idea if the C++ version of `T` has move/copy/assign/delete overloads
+///  * `nsTArray<T>` has no idea if the Rust version of `T` has a Drop/Clone impl
+///  * C++ can do all sorts of unsound things that Rust can't catch
+///  * C++ and Rust don't agree on how zero-sized/empty types should be handled
+///
+/// The gecko-ffi feature will not work if you aren't linking with code that has nsTArray
+/// defined. Specifically, we must share the symbol for nsTArray's empty singleton. You will get
+/// linking errors if that isn't defined.
+///
+/// The gecko-ffi feature also limits ThinVec to the legacy behaviors of nsTArray. Most notably,
+/// nsTArray has a maximum capacity of i32::MAX (~2.1 billion items). Probably not an issue.
+/// Probably.
+///
+/// [pinned]: https://doc.rust-lang.org/std/pin/index.html
+
 // modules: a simple way to cfg a whole bunch of impl details at once
 
 #[cfg(not(feature = "gecko-ffi"))]
@@ -25,11 +166,73 @@ mod impl_details {
 
 #[cfg(feature = "gecko-ffi")]
 mod impl_details {
-    pub const AUTO_MASK: u32 = 1 << 31;
-    pub const CAP_MASK: u32 = !AUTO_MASK;
+    // Support for briding a gecko nsTArray verbatim into a ThinVec.
+    //
+    // ThinVec can't see copy/move/delete implementations
+    // from C++
+    //
+    // The actual layout of an nsTArray is:
+    //
+    // ```cpp
+    // struct {
+    //   uint32_t mLength;
+    //   uint32_t mCapacity: 31;
+    //   uint32_t mIsAutoArray: 1;
+    // }
+    // ```
+    //
+    // Rust doesn't natively support bit-fields, so we manually mask
+    // and shift the bit. When the "auto" bit is set, the header and buffer
+    // are actually on the stack, meaning the ThinVec pointer-to-header
+    // is essentially an "owned borrow", and therefore dangerous to handle.
+    // There are no safety guards for this situation.
+    //
+    // On little-endian platforms, the auto bit will be the high-bit of
+    // our capacity u32. On big-endian platforms, it will be the low bit.
+    // Hence we need some platform-specific CFGs for the necessary masking/shifting.
+    // 
+    // ThinVec won't ever construct an auto array. They only happen when
+    // bridging from C++. This means we don't need to ever set/preserve the bit.
+    // We just need to be able to read and handle it if it happens to be there.
+    //
+    // Handling the auto bit mostly just means not freeing/reallocating the buffer.
 
     pub type SizeType = u32;
-    const MAX_CAP: usize = i32::max_value() as usize;
+
+    pub const MAX_CAP: usize = i32::max_value() as usize;
+
+    // Little endian: the auto bit is the high bit, and the capacity is
+    // verbatim. So we just need to mask off the high bit. Note that
+    // this masking is unnecessary when packing, because assert_size
+    // guards against the high bit being set.
+    #[cfg(target_endian = "little")]
+    pub fn pack_capacity(cap: SizeType) -> SizeType {
+        cap as SizeType
+    }
+    #[cfg(target_endian = "little")]
+    pub fn unpack_capacity(cap: SizeType) -> usize {
+        (cap as usize) & !(1 << 31)
+    }
+    #[cfg(target_endian = "little")]
+    pub fn is_auto(cap: SizeType) -> bool {
+        (cap & (1 << 31)) != 0
+    }
+
+    // Big endian: the auto bit is the low bit, and the capacity is
+    // shifted up one bit. Masking out the auto bit is unnecessary,
+    // as rust shifts always shift in 0's for unsigned integers.
+    #[cfg(target_endian = "big")]
+    pub fn pack_capacity(cap: SizeType) -> SizeType {
+        (cap as SizeType) << 1
+    }
+    #[cfg(target_endian = "big")]
+    pub fn unpack_capacity(cap: SizeType) -> usize {
+        (cap >> 1) as usize
+    }
+    #[cfg(target_endian = "big")]
+    pub fn is_auto(cap: SizeType) -> bool {
+        (cap & 1) != 0
+    }
 
     #[inline]
     pub fn assert_size(x: usize) -> SizeType {
@@ -41,7 +244,9 @@ mod impl_details {
 
 }
 
-/// The header of a ThinVec
+/// The header of a ThinVec.
+///
+/// The _cap can be a bitfield, so use accessors to avoid trouble.
 #[repr(C)]
 struct Header {
     _len: SizeType,
@@ -78,18 +283,22 @@ impl Header {
 #[cfg(feature = "gecko-ffi")]
 impl Header {
     fn cap(&self) -> usize {
-        (self._cap & CAP_MASK) as usize
+        unpack_capacity(self._cap)
     }
 
     fn set_cap(&mut self, cap: usize) {
-        debug_assert!(cap & (CAP_MASK as usize) == cap);
-        // FIXME: this is busted because it reads uninit memory
+        // debug check that our packing is working
+        debug_assert_eq!(unpack_capacity(pack_capacity(cap as SizeType)), cap);
+        // FIXME: this assert is busted because it reads uninit memory
         // debug_assert!(!self.uses_stack_allocated_buffer());
-        self._cap = assert_size(cap) & CAP_MASK;
+
+        // NOTE: this always stores a cleared auto bit, because set_cap
+        // is only invoked by Rust, and Rust doesn't create auto arrays.
+        self._cap = pack_capacity(assert_size(cap));
     }
 
     fn uses_stack_allocated_buffer(&self) -> bool {
-        self._cap & AUTO_MASK != 0
+        is_auto(self._cap)
     }
 }
 
@@ -181,27 +390,7 @@ fn header_with_capacity<T>(cap: usize) -> NonNull<Header> {
 
 
 
-/// ThinVec is exactly the same as Vec, except that it stores its `len` and `capacity` in the buffer
-/// it allocates.
-///
-/// This makes the memory footprint of ThinVecs lower; notably in cases where space is reserved for
-/// a non-existence ThinVec<T>. So `Vec<ThinVec<T>>` and `Option<ThinVec<T>>::None` will waste less
-/// space. Being pointer-sized also means it can be passed/stored in registers.
-///
-/// Of course, any actually constructed ThinVec will theoretically have a bigger allocation, but
-/// the fuzzy nature of allocators means that might not actually be the case.
-///
-/// Properties of Vec that are preserved:
-/// * `ThinVec::new()` doesn't allocate (it points to a statically allocated singleton)
-/// * reallocation can be done in place
-/// * `size_of::<ThinVec<T>>()` == `size_of::<Option<ThinVec<T>>>()`
-///   * NOTE: This is only possible when the `unstable` feature is used.
-///
-/// Properties of Vec that aren't preserved:
-/// * `ThinVec<T>` can't ever be zero-cost roundtripped to a `Box<[T]>`, `String`, or `*mut T`
-/// * `from_raw_parts` doesn't exist
-/// * ThinVec currently doesn't bother to not-allocate for Zero Sized Types (e.g. `ThinVec<()>`),
-///   but it could be done if someone cared enough to implement it.
+/// See the crate's top level documentation for a description of this type.
 #[repr(C)]
 pub struct ThinVec<T> {
     ptr: NonNull<Header>,
@@ -694,7 +883,26 @@ impl<T> ThinVec<T> {
             (*ptr).set_cap(new_cap);
             self.ptr = NonNull::new_unchecked(ptr);
         } else {
-            self.ptr = header_with_capacity::<T>(new_cap);
+            let mut new_header = header_with_capacity::<T>(new_cap);
+
+            // If we get here and have a non-zero len, then we must be handling
+            // a gecko auto array, and we have items in a stack buffer. We shouldn't
+            // free it, but we should memcopy the contents out of it and mark it as empty.
+            //
+            // T is assumed to be trivially relocatable, as this is ~required
+            // for Rust compatibility anyway. Furthermore, we assume C++ won't try
+            // to unconditionally destroy the contents of the stack allocated buffer
+            // (i.e. it's obfuscated behind a union).
+            //
+            // In effect, we are partially reimplementing the auto array move constructor
+            // by leaving behind a valid empty instance.
+            let len = self.len();
+            if cfg!(feature = "gecko-ffi") && len > 0 {
+                new_header.as_mut().data::<T>().copy_from_nonoverlapping(self.data_raw(), len);
+                self.set_len(0);
+            }
+            
+            self.ptr = new_header;
         }
     }
 
@@ -1759,6 +1967,7 @@ mod std_tests {
     }
 
     #[test]
+    #[cfg(not(feature = "gecko-ffi"))]
     fn test_drain_max_vec_size() {
         let mut v = ThinVec::<()>::with_capacity(usize::max_value());
         unsafe { v.set_len(usize::max_value()); }
