@@ -12,146 +12,146 @@ use std::ptr::NonNull;
 
 use impl_details::*;
 
-/// ThinVec is exactly the same as Vec, except that it stores its `len` and `capacity` in the buffer
-/// it allocates.
-///
-/// This makes the memory footprint of ThinVecs lower; notably in cases where space is reserved for
-/// a non-existence ThinVec<T>. So `Vec<ThinVec<T>>` and `Option<ThinVec<T>>::None` will waste less
-/// space. Being pointer-sized also means it can be passed/stored in registers.
-///
-/// Of course, any actually constructed ThinVec will theoretically have a bigger allocation, but
-/// the fuzzy nature of allocators means that might not actually be the case.
-///
-/// Properties of Vec that are preserved:
-/// * `ThinVec::new()` doesn't allocate (it points to a statically allocated singleton)
-/// * reallocation can be done in place
-/// * `size_of::<ThinVec<T>>()` == `size_of::<Option<ThinVec<T>>>()`
-///
-/// Properties of Vec that aren't preserved:
-/// * `ThinVec<T>` can't ever be zero-cost roundtripped to a `Box<[T]>`, `String`, or `*mut T`
-/// * `from_raw_parts` doesn't exist
-/// * ThinVec currently doesn't bother to not-allocate for Zero Sized Types (e.g. `ThinVec<()>`),
-///   but it could be done if someone cared enough to implement it.
-///
-///
-///
-/// # Gecko FFI
-///
-/// If you enable the gecko-ffi feature, ThinVec will verbatim bridge with the nsTArray type in
-/// Gecko (Firefox). That is, ThinVec and nsTArray have identical layouts *but not ABIs*, 
-/// so nsTArrays/ThinVecs an be natively manipulated by C++ and Rust, and ownership can be 
-/// transferred across the FFI boundary (**IF YOU ARE CAREFUL, SEE BELOW!!**).
-///
-/// While this feature is handy, it is also inherently dangerous to use because Rust and C++ do not
-/// know about eachother. Specifically, this can be an issue with non-POD types (types which
-/// have destructors, move constructors, or are `!Copy`).
-///
-/// ## Do Not Pass By Value
-///
-/// The biggest thing to keep in mind is that **FFI functions cannot pass ThinVec/nsTArray 
-/// by-value**. That is, these are busted APIs:
-///
-/// ```rust,ignore
-/// // BAD WRONG
-/// extern fn process_data(data: ThinVec<u32>) { ... }
-/// // BAD WRONG
-/// extern fn get_data() -> ThinVec<u32> { ... }
-/// ```
-///
-/// You must instead pass by-reference:
-///
-/// ```rust
-/// # use thin_vec::*;
-/// # use std::mem;
-///
-/// // Read-only access, ok!
-/// extern fn process_data(data: &ThinVec<u32>) {
-///     for val in data {
-///         println!("{}", val);
-///     }
-/// }
-/// 
-/// // Replace with empty instance to take ownership, ok!
-/// extern fn consume_data(data: &mut ThinVec<u32>) {
-///     let owned = mem::replace(data, ThinVec::new());
-///     mem::drop(owned);
-/// }
-/// 
-/// // Mutate input, ok!
-/// extern fn add_data(dataset: &mut ThinVec<u32>) {
-///     dataset.push(37);
-///     dataset.push(12);
-/// }
-/// 
-/// // Return via out-param, usually ok!
-/// //
-/// // WARNING: output must be initialized! (Empty nsTArrays are free, so just do it!)
-/// extern fn get_data(output: &mut ThinVec<u32>) {
-///     *output = thin_vec![1, 2, 3, 4, 5];
-/// }
-/// ```
-///
-/// Ignorable Explanation For Those Who Really Want To Know Why:
-///
-/// > The fundamental issue is that Rust and C++ can't currently communicate about destructors, and
-/// > the semantics of C++ require destructors of function arguments to be run when the function
-/// > returns. Whether the callee or caller is responsible for this is also platform-specific, so
-/// > trying to hack around it manually would be messy. 
-/// >
-/// > Also a type having a destructor changes its C++ ABI, because that type must actually exist 
-/// > in memory (unlike a trivial struct, which is often passed in registers). We don't currently
-/// > have a way to communicate to Rust that this is happening, so even if we worked out the
-/// > destructor issue with say, MaybeUninit, it would still be a non-starter without some RFCs
-/// > to add explicit rustc support.
-/// >
-/// > Realistically, the best answer here is to have a "heavier" bindgen that can secretly
-/// > generate FFI glue so we can pass things "by value" and have it generate by-reference code
-/// > behind our back (like the cxx crate does). This would muddy up debugging/searchfox though.
-///
-/// ## Types Should Be Trivially Relocatable
-///
-/// Types in Rust are always trivially relocatable (unless suitably borrowed/[pinned][]/hidden).
-/// This means all Rust types are legal to relocate with a bitwise copy, you cannot provide
-/// copy or move constructors to execute when this happens, and the old location won't have its
-/// destructor run. This will cause problems for types which have a significant location
-/// (types that intrusively point into themselves or have their location registered with a service).
-///
-/// While relocations are generally predictable if you're very careful, **you should avoid using
-/// types with significant locations with Rust FFI**.
-///
-/// Specifically, ThinVec will trivially relocate its contents whenever it needs to reallocate its
-/// buffer to change its capacity. This is the default reallocation strategy for nsTArray, and is
-/// suitable for the vast majority of types. Just be aware of this limitation!
-///
-/// ## Auto Arrays Are Dangerous
-///
-/// ThinVec has *some* support for handling auto arrays which store their buffer on the stack, 
-/// but this isn't well tested.
-///
-/// Regardless of how much support we provide, Rust won't be aware of the buffer's limited lifetime,
-/// so standard auto array safety caveats apply about returning/storing them! ThinVec won't ever
-/// produce an auto array on its own, so this is only an issue for transferring an nsTArray into
-/// Rust.
-///
-/// ## Other Issues
-///
-/// Standard FFI caveats also apply: 
-///
-///  * Rust is more strict about POD types being initialized (use MaybeUninit if you must)
-///  * `ThinVec<T>` has no idea if the C++ version of `T` has move/copy/assign/delete overloads
-///  * `nsTArray<T>` has no idea if the Rust version of `T` has a Drop/Clone impl
-///  * C++ can do all sorts of unsound things that Rust can't catch
-///  * C++ and Rust don't agree on how zero-sized/empty types should be handled
-///
-/// The gecko-ffi feature will not work if you aren't linking with code that has nsTArray
-/// defined. Specifically, we must share the symbol for nsTArray's empty singleton. You will get
-/// linking errors if that isn't defined.
-///
-/// The gecko-ffi feature also limits ThinVec to the legacy behaviors of nsTArray. Most notably,
-/// nsTArray has a maximum capacity of i32::MAX (~2.1 billion items). Probably not an issue.
-/// Probably.
-///
-/// [pinned]: https://doc.rust-lang.org/std/pin/index.html
+//! ThinVec is exactly the same as Vec, except that it stores its `len` and `capacity` in the buffer
+//! it allocates.
+//!
+//! This makes the memory footprint of ThinVecs lower; notably in cases where space is reserved for
+//! a non-existence ThinVec<T>. So `Vec<ThinVec<T>>` and `Option<ThinVec<T>>::None` will waste less
+//! space. Being pointer-sized also means it can be passed/stored in registers.
+//!
+//! Of course, any actually constructed ThinVec will theoretically have a bigger allocation, but
+//! the fuzzy nature of allocators means that might not actually be the case.
+//!
+//! Properties of Vec that are preserved:
+//! * `ThinVec::new()` doesn't allocate (it points to a statically allocated singleton)
+//! * reallocation can be done in place
+//! * `size_of::<ThinVec<T>>()` == `size_of::<Option<ThinVec<T>>>()`
+//!
+//! Properties of Vec that aren't preserved:
+//! * `ThinVec<T>` can't ever be zero-cost roundtripped to a `Box<[T]>`, `String`, or `*mut T`
+//! * `from_raw_parts` doesn't exist
+//! * ThinVec currently doesn't bother to not-allocate for Zero Sized Types (e.g. `ThinVec<()>`),
+//!   but it could be done if someone cared enough to implement it.
+//!
+//!
+//!
+//! # Gecko FFI
+//!
+//! If you enable the gecko-ffi feature, ThinVec will verbatim bridge with the nsTArray type in
+//! Gecko (Firefox). That is, ThinVec and nsTArray have identical layouts *but not ABIs*, 
+//! so nsTArrays/ThinVecs an be natively manipulated by C++ and Rust, and ownership can be 
+//! transferred across the FFI boundary (**IF YOU ARE CAREFUL, SEE BELOW!!**).
+//!
+//! While this feature is handy, it is also inherently dangerous to use because Rust and C++ do not
+//! know about eachother. Specifically, this can be an issue with non-POD types (types which
+//! have destructors, move constructors, or are `!Copy`).
+//!
+//! ## Do Not Pass By Value
+//!
+//! The biggest thing to keep in mind is that **FFI functions cannot pass ThinVec/nsTArray 
+//! by-value**. That is, these are busted APIs:
+//!
+//! ```rust,ignore
+//! // BAD WRONG
+//! extern fn process_data(data: ThinVec<u32>) { ... }
+//! // BAD WRONG
+//! extern fn get_data() -> ThinVec<u32> { ... }
+//! ```
+//!
+//! You must instead pass by-reference:
+//!
+//! ```rust
+//! # use thin_vec::*;
+//! # use std::mem;
+//!
+//! // Read-only access, ok!
+//! extern fn process_data(data: &ThinVec<u32>) {
+//!     for val in data {
+//!         println!("{}", val);
+//!     }
+//! }
+//! 
+//! // Replace with empty instance to take ownership, ok!
+//! extern fn consume_data(data: &mut ThinVec<u32>) {
+//!     let owned = mem::replace(data, ThinVec::new());
+//!     mem::drop(owned);
+//! }
+//! 
+//! // Mutate input, ok!
+//! extern fn add_data(dataset: &mut ThinVec<u32>) {
+//!     dataset.push(37);
+//!     dataset.push(12);
+//! }
+//! 
+//! // Return via out-param, usually ok!
+//! //
+//! // WARNING: output must be initialized! (Empty nsTArrays are free, so just do it!)
+//! extern fn get_data(output: &mut ThinVec<u32>) {
+//!     *output = thin_vec![1, 2, 3, 4, 5];
+//! }
+//! ```
+//!
+//! Ignorable Explanation For Those Who Really Want To Know Why:
+//!
+//! > The fundamental issue is that Rust and C++ can't currently communicate about destructors, and
+//! > the semantics of C++ require destructors of function arguments to be run when the function
+//! > returns. Whether the callee or caller is responsible for this is also platform-specific, so
+//! > trying to hack around it manually would be messy. 
+//! >
+//! > Also a type having a destructor changes its C++ ABI, because that type must actually exist 
+//! > in memory (unlike a trivial struct, which is often passed in registers). We don't currently
+//! > have a way to communicate to Rust that this is happening, so even if we worked out the
+//! > destructor issue with say, MaybeUninit, it would still be a non-starter without some RFCs
+//! > to add explicit rustc support.
+//! >
+//! > Realistically, the best answer here is to have a "heavier" bindgen that can secretly
+//! > generate FFI glue so we can pass things "by value" and have it generate by-reference code
+//! > behind our back (like the cxx crate does). This would muddy up debugging/searchfox though.
+//!
+//! ## Types Should Be Trivially Relocatable
+//!
+//! Types in Rust are always trivially relocatable (unless suitably borrowed/[pinned][]/hidden).
+//! This means all Rust types are legal to relocate with a bitwise copy, you cannot provide
+//! copy or move constructors to execute when this happens, and the old location won't have its
+//! destructor run. This will cause problems for types which have a significant location
+//! (types that intrusively point into themselves or have their location registered with a service).
+//!
+//! While relocations are generally predictable if you're very careful, **you should avoid using
+//! types with significant locations with Rust FFI**.
+//!
+//! Specifically, ThinVec will trivially relocate its contents whenever it needs to reallocate its
+//! buffer to change its capacity. This is the default reallocation strategy for nsTArray, and is
+//! suitable for the vast majority of types. Just be aware of this limitation!
+//!
+//! ## Auto Arrays Are Dangerous
+//!
+//! ThinVec has *some* support for handling auto arrays which store their buffer on the stack, 
+//! but this isn't well tested.
+//!
+//! Regardless of how much support we provide, Rust won't be aware of the buffer's limited lifetime,
+//! so standard auto array safety caveats apply about returning/storing them! ThinVec won't ever
+//! produce an auto array on its own, so this is only an issue for transferring an nsTArray into
+//! Rust.
+//!
+//! ## Other Issues
+//!
+//! Standard FFI caveats also apply: 
+//!
+//!  * Rust is more strict about POD types being initialized (use MaybeUninit if you must)
+//!  * `ThinVec<T>` has no idea if the C++ version of `T` has move/copy/assign/delete overloads
+//!  * `nsTArray<T>` has no idea if the Rust version of `T` has a Drop/Clone impl
+//!  * C++ can do all sorts of unsound things that Rust can't catch
+//!  * C++ and Rust don't agree on how zero-sized/empty types should be handled
+//!
+//! The gecko-ffi feature will not work if you aren't linking with code that has nsTArray
+//! defined. Specifically, we must share the symbol for nsTArray's empty singleton. You will get
+//! linking errors if that isn't defined.
+//!
+//! The gecko-ffi feature also limits ThinVec to the legacy behaviors of nsTArray. Most notably,
+//! nsTArray has a maximum capacity of i32::MAX (~2.1 billion items). Probably not an issue.
+//! Probably.
+//!
+//! [pinned]: https://doc.rust-lang.org/std/pin/index.html
 
 // modules: a simple way to cfg a whole bunch of impl details at once
 
