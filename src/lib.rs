@@ -1,17 +1,3 @@
-use std::{fmt, io, ptr, mem, slice};
-use std::collections::Bound;
-use std::iter::FromIterator;
-use std::slice::IterMut;
-use std::ops::{Deref, DerefMut, RangeBounds};
-use std::marker::PhantomData;
-use std::alloc::*;
-use std::cmp::*;
-use std::hash::*;
-use std::borrow::*;
-use std::ptr::NonNull;
-
-use impl_details::*;
-
 //! ThinVec is exactly the same as Vec, except that it stores its `len` and `capacity` in the buffer
 //! it allocates.
 //!
@@ -152,6 +138,20 @@ use impl_details::*;
 //! Probably.
 //!
 //! [pinned]: https://doc.rust-lang.org/std/pin/index.html
+
+use std::{fmt, io, ptr, mem, slice};
+use std::collections::Bound;
+use std::iter::FromIterator;
+use std::slice::IterMut;
+use std::ops::{Deref, DerefMut, RangeBounds};
+use std::marker::PhantomData;
+use std::alloc::*;
+use std::cmp::*;
+use std::hash::*;
+use std::borrow::*;
+use std::ptr::NonNull;
+
+use impl_details::*;
 
 // modules: a simple way to cfg a whole bunch of impl details at once
 
