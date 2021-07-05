@@ -274,7 +274,7 @@ impl Header {
                 NonNull::dangling().as_ptr()
             } else {
                 // This could technically result in overflow, but padding would have to be absurdly large for this to occur.
-                ptr.offset((header_size + padding) as isize) as *mut T
+                ptr.add(header_size + padding) as *mut T
             }
         }
     }
