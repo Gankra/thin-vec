@@ -269,11 +269,12 @@ impl Header {
         let ptr = self as *const Header as *mut Header as *mut u8;
 
         unsafe {
-            if padding > 0 && self.len() == 0 {
+            if padding > 0 && self.cap() == 0 {
                 // The empty header isn't well-aligned, just make an aligned one up
                 NonNull::dangling().as_ptr()
             } else {
-                ptr.offset(header_size as isize) as *mut T
+                // This could technically result in overflow, but padding would have to be absurdly large for this to occur.
+                ptr.offset((header_size + padding) as isize) as *mut T
             }
         }
     }
@@ -2575,4 +2576,37 @@ mod std_tests {
         }
     }
 */
+
+    #[test]
+    fn test_header_data() {
+        macro_rules! assert_aligned_head_ptr {
+            ($typename:ty) => {{
+                let v: ThinVec<$typename> = ThinVec::with_capacity(1 /* ensure allocation */);
+                let head_ptr: *mut $typename = v.header().data::<$typename>();
+                assert_eq!(
+                    head_ptr.align_offset(std::mem::align_of::<$typename>()),
+                    0,
+                    "expected Header::data<{}> to be aligned",
+                    stringify!($typename)
+                );
+            }};
+        }
+
+        const HEADER_SIZE: usize = std::mem::size_of::<Header>();
+        assert_eq!(2 * std::mem::size_of::<usize>(), HEADER_SIZE);
+
+        #[repr(C, align(128))]
+        struct Funky<T>(T);
+        assert_eq!(padding::<Funky<()>>(), 128 - HEADER_SIZE);
+        assert_aligned_head_ptr!(Funky<()>);
+
+        assert_eq!(padding::<Funky<u8>>(), 128 - HEADER_SIZE);
+        assert_aligned_head_ptr!(Funky<u8>);
+
+        assert_eq!(padding::<Funky<[(); 1024]>>(), 128 - HEADER_SIZE);
+        assert_aligned_head_ptr!(Funky<[(); 1024]>);
+
+        assert_eq!(padding::<Funky<[*mut usize; 1024]>>(), 128 - HEADER_SIZE);
+        assert_aligned_head_ptr!(Funky<[*mut usize; 1024]>);
+    }
 }
