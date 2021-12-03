@@ -398,6 +398,8 @@ pub struct ThinVec<T> {
     boo: PhantomData<T>,
 }
 
+unsafe impl<T: Sync> Sync for ThinVec<T> {}
+unsafe impl<T: Send> Send for ThinVec<T> {}
 
 /// Creates a `ThinVec` containing the arguments.
 ///
