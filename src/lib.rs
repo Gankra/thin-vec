@@ -139,6 +139,8 @@
 //!
 //! [pinned]: https://doc.rust-lang.org/std/pin/index.html
 
+#![allow(clippy::comparison_chain, clippy::missing_safety_doc)]
+
 use std::alloc::*;
 use std::borrow::*;
 use std::cmp::*;
@@ -485,6 +487,7 @@ impl<T> ThinVec<T> {
     pub fn capacity(&self) -> usize {
         self.header().cap()
     }
+
     pub unsafe fn set_len(&mut self, len: usize) {
         self.header_mut().set_len(len)
     }
@@ -495,7 +498,7 @@ impl<T> ThinVec<T> {
             self.reserve(1);
         }
         unsafe {
-            ptr::write(self.data_raw().offset(old_len as isize), val);
+            ptr::write(self.data_raw().add(old_len), val);
             self.set_len(old_len + 1);
         }
     }
@@ -508,7 +511,7 @@ impl<T> ThinVec<T> {
 
         unsafe {
             self.set_len(old_len - 1);
-            Some(ptr::read(self.data_raw().offset(old_len as isize - 1)))
+            Some(ptr::read(self.data_raw().add(old_len - 1)))
         }
     }
 
@@ -521,12 +524,8 @@ impl<T> ThinVec<T> {
         }
         unsafe {
             let ptr = self.data_raw();
-            ptr::copy(
-                ptr.offset(idx as isize),
-                ptr.offset(idx as isize + 1),
-                old_len - idx,
-            );
-            ptr::write(ptr.offset(idx as isize), elem);
+            ptr::copy(ptr.add(idx), ptr.add(idx + 1), old_len - idx);
+            ptr::write(ptr.add(idx), elem);
             self.set_len(old_len + 1);
         }
     }
@@ -539,12 +538,8 @@ impl<T> ThinVec<T> {
         unsafe {
             self.set_len(old_len - 1);
             let ptr = self.data_raw();
-            let val = ptr::read(self.data_raw().offset(idx as isize));
-            ptr::copy(
-                ptr.offset(idx as isize + 1),
-                ptr.offset(idx as isize),
-                old_len - idx - 1,
-            );
+            let val = ptr::read(self.data_raw().add(idx));
+            ptr::copy(ptr.add(idx + 1), ptr.add(idx), old_len - idx - 1);
             val
         }
     }
@@ -556,9 +551,9 @@ impl<T> ThinVec<T> {
 
         unsafe {
             let ptr = self.data_raw();
-            ptr::swap(ptr.offset(idx as isize), ptr.offset(old_len as isize - 1));
+            ptr::swap(ptr.add(idx), ptr.add(old_len - 1));
             self.set_len(old_len - 1);
-            ptr::read(ptr.offset(old_len as isize - 1))
+            ptr::read(ptr.add(old_len - 1))
         }
     }
 
@@ -580,7 +575,7 @@ impl<T> ThinVec<T> {
             ptr::drop_in_place(&mut self[..]);
 
             // Don't mutate the empty singleton!
-            if self.len() != 0 {
+            if !self.is_empty() {
                 self.set_len(0);
             }
         }
@@ -815,11 +810,11 @@ impl<T> ThinVec<T> {
             let mut w: usize = 1;
 
             while r < ln {
-                let p_r = p.offset(r as isize);
-                let p_wm1 = p.offset((w - 1) as isize);
+                let p_r = p.add(r);
+                let p_wm1 = p.add(w - 1);
                 if !same_bucket(&mut *p_r, &mut *p_wm1) {
                     if r != w {
-                        let p_w = p_wm1.offset(1);
+                        let p_w = p_wm1.add(1);
                         mem::swap(&mut *p_r, &mut *p_w);
                     }
                     w += 1;
@@ -840,11 +835,7 @@ impl<T> ThinVec<T> {
         unsafe {
             let mut new_vec = ThinVec::with_capacity(new_vec_len);
 
-            ptr::copy_nonoverlapping(
-                self.data_raw().offset(at as isize),
-                new_vec.data_raw(),
-                new_vec_len,
-            );
+            ptr::copy_nonoverlapping(self.data_raw().add(at), new_vec.data_raw(), new_vec_len);
 
             // Don't mutate the empty singleton!
             if new_vec_len != 0 {
@@ -889,13 +880,12 @@ impl<T> ThinVec<T> {
             }
 
             let iter =
-                slice::from_raw_parts_mut(self.data_raw().offset(start as isize), end - start)
-                    .iter_mut();
+                slice::from_raw_parts_mut(self.data_raw().add(start), end - start).iter_mut();
 
             Drain {
-                iter: iter,
+                iter,
                 vec: self,
-                end: end,
+                end,
                 tail: len - end,
             }
         }
@@ -1133,10 +1123,6 @@ where
     fn eq(&self, other: &ThinVec<B>) -> bool {
         self[..] == other[..]
     }
-    #[inline]
-    fn ne(&self, other: &ThinVec<B>) -> bool {
-        self[..] != other[..]
-    }
 }
 
 impl<A, B> PartialEq<Vec<B>> for ThinVec<A>
@@ -1146,10 +1132,6 @@ where
     #[inline]
     fn eq(&self, other: &Vec<B>) -> bool {
         self[..] == other[..]
-    }
-    #[inline]
-    fn ne(&self, other: &Vec<B>) -> bool {
-        self[..] != other[..]
     }
 }
 
@@ -1161,10 +1143,6 @@ where
     fn eq(&self, other: &[B]) -> bool {
         self[..] == other[..]
     }
-    #[inline]
-    fn ne(&self, other: &[B]) -> bool {
-        self[..] != other[..]
-    }
 }
 
 impl<'a, A, B> PartialEq<&'a [B]> for ThinVec<A>
@@ -1175,10 +1153,6 @@ where
     fn eq(&self, other: &&'a [B]) -> bool {
         self[..] == other[..]
     }
-    #[inline]
-    fn ne(&self, other: &&'a [B]) -> bool {
-        self[..] != other[..]
-    }
 }
 
 macro_rules! array_impls {
@@ -1186,15 +1160,11 @@ macro_rules! array_impls {
         impl<A, B> PartialEq<[B; $N]> for ThinVec<A> where A: PartialEq<B> {
             #[inline]
             fn eq(&self, other: &[B; $N]) -> bool { self[..] == other[..] }
-            #[inline]
-            fn ne(&self, other: &[B; $N]) -> bool { self[..] != other[..] }
         }
 
         impl<'a, A, B> PartialEq<&'a [B; $N]> for ThinVec<A> where A: PartialEq<B> {
             #[inline]
             fn eq(&self, other: &&'a [B; $N]) -> bool { self[..] == other[..] }
-            #[inline]
-            fn ne(&self, other: &&'a [B; $N]) -> bool { self[..] != other[..] }
         }
     )*}
 }
@@ -1285,7 +1255,7 @@ impl<T> Iterator for IntoIter<T> {
             unsafe {
                 let old_start = self.start;
                 self.start += 1;
-                Some(ptr::read(self.vec.data_raw().offset(old_start as isize)))
+                Some(ptr::read(self.vec.data_raw().add(old_start)))
             }
         }
     }
@@ -1344,7 +1314,7 @@ impl<'a, T> ExactSizeIterator for Drain<'a, T> {}
 impl<'a, T> Drop for Drain<'a, T> {
     fn drop(&mut self) {
         // Consume the rest of the iterator.
-        while let Some(_) = self.next() {}
+        for _ in self.by_ref() {}
 
         // Move the tail over the drained items, and update the length.
         unsafe {
@@ -1353,8 +1323,8 @@ impl<'a, T> Drop for Drain<'a, T> {
             // Don't mutate the empty singleton!
             if vec.has_allocation() {
                 let old_len = vec.len();
-                let start = vec.data_raw().offset(old_len as isize);
-                let end = vec.data_raw().offset(self.end as isize);
+                let start = vec.data_raw().add(old_len);
+                let end = vec.data_raw().add(self.end);
                 ptr::copy(end, start, self.tail);
                 vec.set_len(old_len + self.tail);
             }
@@ -1914,35 +1884,35 @@ mod std_tests {
     #[should_panic]
     fn test_slice_out_of_bounds_1() {
         let x = thin_vec![1, 2, 3, 4, 5];
-        &x[!0..];
+        let _ = &x[!0..];
     }
 
     #[test]
     #[should_panic]
     fn test_slice_out_of_bounds_2() {
         let x = thin_vec![1, 2, 3, 4, 5];
-        &x[..6];
+        let _ = &x[..6];
     }
 
     #[test]
     #[should_panic]
     fn test_slice_out_of_bounds_3() {
         let x = thin_vec![1, 2, 3, 4, 5];
-        &x[!0..4];
+        let _ = &x[!0..4];
     }
 
     #[test]
     #[should_panic]
     fn test_slice_out_of_bounds_4() {
         let x = thin_vec![1, 2, 3, 4, 5];
-        &x[1..6];
+        let _ = &x[1..6];
     }
 
     #[test]
     #[should_panic]
     fn test_slice_out_of_bounds_5() {
         let x = thin_vec![1, 2, 3, 4, 5];
-        &x[3..2];
+        let _ = &x[3..2];
     }
 
     #[test]
