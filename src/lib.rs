@@ -2647,6 +2647,7 @@ mod std_tests {
     */
 
     #[test]
+    #[cfg_attr(feature = "gecko-ffi", ignore)]
     fn test_header_data() {
         macro_rules! assert_aligned_head_ptr {
             ($typename:ty) => {{
