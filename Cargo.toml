@@ -2,8 +2,8 @@
 edition = "2018"
 name = "thin-vec"
 version = "0.2.3"
-authors = ["Alexis Beingessner <a.beingessner@gmail.com>"]
-description = "a vec that takes up less space on the stack"
+authors = ["Aria Beingessner <a.beingessner@gmail.com>"]
+description = "A vec that takes up less space on the stack"
 license = "MIT/Apache-2.0"
 repository = "https://github.com/gankra/thin-vec"
 homepage = "https://github.com/gankra/thin-vec"
