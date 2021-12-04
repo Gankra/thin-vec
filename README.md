@@ -1,6 +1,4 @@
-![Rust CI](https://github.com/Gankra/thin-vec/workflows/Rust/badge.svg?branch=master)
-
-[![crates.io](https://img.shields.io/crates/v/thin-vec.svg)](https://crates.io/crates/thin-vec) [![](https://docs.rs/thin-vec/badge.svg)](https://docs.rs/thin-vec)
+![Rust CI](https://github.com/Gankra/thin-vec/workflows/Rust/badge.svg?branch=master) [![crates.io](https://img.shields.io/crates/v/thin-vec.svg)](https://crates.io/crates/thin-vec) [![](https://docs.rs/thin-vec/badge.svg)](https://docs.rs/thin-vec)
 
 # thin-vec
 
