@@ -264,23 +264,6 @@ impl Header {
     fn set_len(&mut self, len: usize) {
         self._len = assert_size(len);
     }
-
-    fn data<T>(&self) -> *mut T {
-        let header_size = mem::size_of::<Header>();
-        let padding = padding::<T>();
-
-        let ptr = self as *const Header as *mut Header as *mut u8;
-
-        unsafe {
-            if padding > 0 && self.cap() == 0 {
-                // The empty header isn't well-aligned, just make an aligned one up
-                NonNull::dangling().as_ptr()
-            } else {
-                // This could technically result in overflow, but padding would have to be absurdly large for this to occur.
-                ptr.add(header_size + padding) as *mut T
-            }
-        }
-    }
 }
 
 #[cfg(feature = "gecko-ffi")]
@@ -321,10 +304,10 @@ impl Header {
 /// optimize everything to not do that (basically, make ptr == len and branch
 /// on size == 0 in every method), but it's a bunch of work for something that
 /// doesn't matter much.
-#[cfg(any(not(feature = "gecko-ffi"), test))]
+#[cfg(any(not(feature = "gecko-ffi"), test, miri))]
 static EMPTY_HEADER: Header = Header { _len: 0, _cap: 0 };
 
-#[cfg(all(feature = "gecko-ffi", not(test)))]
+#[cfg(all(feature = "gecko-ffi", not(test), not(miri)))]
 extern "C" {
     #[link_name = "sEmptyTArrayHeader"]
     static EMPTY_HEADER: Header;
@@ -470,7 +453,18 @@ impl<T> ThinVec<T> {
         unsafe { self.ptr.as_ref() }
     }
     fn data_raw(&self) -> *mut T {
-        self.header().data()
+        unsafe {
+            if self.header().cap() == 0 {
+                // The empty header isn't well-aligned, just make an aligned one up
+                NonNull::dangling().as_ptr()
+            } else {
+                // This could technically result in overflow, but padding would have to be absurdly large for this to occur.
+                let padding = padding::<T>();
+                let header_size = mem::size_of::<Header>();
+                let ptr = self.ptr.as_ptr() as *mut u8;
+                ptr.add(header_size + padding) as *mut T
+            }
+        }
     }
 
     // This is unsafe when the header is EMPTY_HEADER.
@@ -565,7 +559,7 @@ impl<T> ThinVec<T> {
                 // doesn't re-drop the just-failed value.
                 let new_len = self.len() - 1;
                 self.set_len(new_len);
-                ptr::drop_in_place(self.get_unchecked_mut(new_len));
+                ptr::drop_in_place(self.data_raw().add(new_len));
             }
         }
     }
@@ -915,7 +909,7 @@ impl<T> ThinVec<T> {
             (*ptr).set_cap(new_cap);
             self.ptr = NonNull::new_unchecked(ptr);
         } else {
-            let mut new_header = header_with_capacity::<T>(new_cap);
+            let new_header = header_with_capacity::<T>(new_cap);
 
             // If we get here and have a non-zero len, then we must be handling
             // a gecko auto array, and we have items in a stack buffer. We shouldn't
@@ -931,8 +925,9 @@ impl<T> ThinVec<T> {
             let len = self.len();
             if cfg!(feature = "gecko-ffi") && len > 0 {
                 new_header
-                    .as_mut()
-                    .data::<T>()
+                    .as_ptr()
+                    .add(1)
+                    .cast::<T>()
                     .copy_from_nonoverlapping(self.data_raw(), len);
                 self.set_len(0);
             }
@@ -2654,9 +2649,9 @@ mod std_tests {
         macro_rules! assert_aligned_head_ptr {
             ($typename:ty) => {{
                 let v: ThinVec<$typename> = ThinVec::with_capacity(1 /* ensure allocation */);
-                let head_ptr: *mut $typename = v.header().data::<$typename>();
+                let head_ptr: *mut $typename = v.data_raw();
                 assert_eq!(
-                    head_ptr.align_offset(std::mem::align_of::<$typename>()),
+                    head_ptr as usize % std::mem::align_of::<$typename>(),
                     0,
                     "expected Header::data<{}> to be aligned",
                     stringify!($typename)
