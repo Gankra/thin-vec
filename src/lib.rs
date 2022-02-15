@@ -438,17 +438,24 @@ macro_rules! thin_vec {
 
 impl<T> ThinVec<T> {
     pub fn new() -> ThinVec<T> {
-        unsafe {
+        ThinVec::with_capacity(0)
+    }
+
+    pub fn with_capacity(cap: usize) -> ThinVec<T> {
+        // `padding` contains ~static assertions against types that are
+        // incompatible with the current feature flags. We also call it to
+        // invoke these assertions when getting a pointer to the `ThinVec`
+        // contents, but since we also get a pointer to the contents in the
+        // `Drop` impl, trippng an assertion along that code path causes a
+        // double panic. We duplicate the assertion here so that it is
+        // testable,
+        let _ = padding::<T>();
+
+        if cap == 0 {
             ThinVec {
                 ptr: NonNull::new_unchecked(&EMPTY_HEADER as *const Header as *mut Header),
                 boo: PhantomData,
             }
-        }
-    }
-
-    pub fn with_capacity(cap: usize) -> ThinVec<T> {
-        if cap == 0 {
-            ThinVec::new()
         } else {
             ThinVec {
                 ptr: header_with_capacity::<T>(cap),
