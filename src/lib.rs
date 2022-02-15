@@ -452,9 +452,11 @@ impl<T> ThinVec<T> {
         let _ = padding::<T>();
 
         if cap == 0 {
-            ThinVec {
-                ptr: NonNull::new_unchecked(&EMPTY_HEADER as *const Header as *mut Header),
-                boo: PhantomData,
+            unsafe {
+                ThinVec {
+                    ptr: NonNull::new_unchecked(&EMPTY_HEADER as *const Header as *mut Header),
+                    boo: PhantomData,
+                }
             }
         } else {
             ThinVec {
