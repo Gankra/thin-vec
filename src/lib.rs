@@ -168,6 +168,49 @@ mod impl_details {
     }
 }
 
+#[repr(C)]
+struct StaticThinVec<T, const N: usize> {
+    header: Header,
+    data: [T; N],
+}
+
+macro_rules! thin_vec {
+    ($ty: ty, $arr: expr) => {
+        {
+            static MY_LIT: crate::StaticThinVec<$ty, {$arr.len()}> = crate::StaticThinVec {
+                header: crate::Header {
+                    _len: $arr.len(),
+                    _cap: 0,
+                },
+                data: $arr,
+            };
+            let ptr = &MY_LIT as *const _ as *const super::Header as *mut super::Header;
+            let res: crate::ThinVec<$ty> = crate::ThinVec {
+               ptr: core::ptr::NonNull::new(ptr).unwrap(),
+               boo: std::marker::PhantomData, 
+            };
+            res
+        }
+    }
+}
+
+#[cfg(test)]
+mod thin_lit_tests {
+
+
+    #[test]
+    fn test_thin_lit_into_iter() {
+        let vec = thin_vec!(u32, [0, 1, 2, 3]);
+
+        assert_eq!(vec.into_iter().collect::<Vec<_>>(), vec![0, 1, 2, 3]);
+    }
+    fn test_thin_lit_push() {
+        let vec = thin_vec!(u32, [0, 1, 2, 3]);
+
+        assert_eq!(vec.into_iter().collect::<Vec<_>>(), vec![0, 1, 2, 3]);
+    }
+}
+
 #[cfg(feature = "gecko-ffi")]
 mod impl_details {
     // Support for briding a gecko nsTArray verbatim into a ThinVec.
@@ -537,9 +580,25 @@ impl<T> ThinVec<T> {
         self.header_mut().set_len(len)
     }
 
+    #[inline(always)]
+    pub fn ensure_mutable(&mut self) {
+        if self.capacity() == 0 {
+            unsafe {
+                let len = self.len();
+                let mut output = ThinVec::with_capacity(len);
+                let from = self.data_raw();
+                let to = output.data_raw();
+
+                from.copy_to_nonoverlapping(to, len);
+                output.set_len(len);
+                mem::forget(mem::replace(self, output));
+            }
+        }
+    }
+
     pub fn push(&mut self, val: T) {
         let old_len = self.len();
-        if old_len == self.capacity() {
+        if old_len >= self.capacity() {
             self.reserve(1);
         }
         unsafe {
@@ -549,9 +608,14 @@ impl<T> ThinVec<T> {
     }
 
     pub fn pop(&mut self) -> Option<T> {
+
         let old_len = self.len();
         if old_len == 0 {
             return None;
+        }
+        // COW
+        if self.capacity() == 0 {
+            self.reserve(0);
         }
 
         unsafe {
@@ -564,7 +628,7 @@ impl<T> ThinVec<T> {
         let old_len = self.len();
 
         assert!(idx <= old_len, "Index out of bounds");
-        if old_len == self.capacity() {
+        if old_len >= self.capacity() {
             self.reserve(1);
         }
         unsafe {
@@ -580,6 +644,8 @@ impl<T> ThinVec<T> {
 
         assert!(idx < old_len, "Index out of bounds");
 
+        self.ensure_mutable();
+
         unsafe {
             self.set_len(old_len - 1);
             let ptr = self.data_raw();
@@ -594,6 +660,8 @@ impl<T> ThinVec<T> {
 
         assert!(idx < old_len, "Index out of bounds");
 
+        self.ensure_mutable();
+
         unsafe {
             let ptr = self.data_raw();
             ptr::swap(ptr.add(idx), ptr.add(old_len - 1));
@@ -603,6 +671,8 @@ impl<T> ThinVec<T> {
     }
 
     pub fn truncate(&mut self, len: usize) {
+        self.ensure_mutable();
+
         unsafe {
             // drop any extra elements
             while len < self.len() {
@@ -616,6 +686,10 @@ impl<T> ThinVec<T> {
     }
 
     pub fn clear(&mut self) {
+        if self.capacity() == 0 {
+            *self = ThinVec::new();
+        }
+        
         unsafe {
             ptr::drop_in_place(&mut self[..]);
 
@@ -974,13 +1048,15 @@ impl<T> ThinVec<T> {
             // In effect, we are partially reimplementing the auto array move constructor
             // by leaving behind a valid empty instance.
             let len = self.len();
-            if cfg!(feature = "gecko-ffi") && len > 0 {
+            if len > 0 {
                 new_header
                     .as_ptr()
                     .add(1)
                     .cast::<T>()
                     .copy_from_nonoverlapping(self.data_raw(), len);
-                self.set_len(0);
+                if cfg!(feature = "gecko-ffi") {
+                    self.set_len(0);
+                }
             }
 
             self.ptr = new_header;
@@ -991,7 +1067,7 @@ impl<T> ThinVec<T> {
     #[inline]
     fn has_allocation(&self) -> bool {
         unsafe {
-            self.ptr.as_ptr() as *const Header != &EMPTY_HEADER
+            self.capacity() != 0
                 && !self.ptr.as_ref().uses_stack_allocated_buffer()
         }
     }
@@ -999,7 +1075,7 @@ impl<T> ThinVec<T> {
     #[cfg(not(feature = "gecko-ffi"))]
     #[inline]
     fn has_allocation(&self) -> bool {
-        self.ptr.as_ptr() as *const Header != &EMPTY_HEADER
+        self.capacity() != 0
     }
 }
 
@@ -1072,8 +1148,10 @@ impl<T: PartialEq> ThinVec<T> {
 impl<T> Drop for ThinVec<T> {
     fn drop(&mut self) {
         unsafe {
-            ptr::drop_in_place(&mut self[..]);
-            self.deallocate();
+            if self.capacity() > 0 {
+                ptr::drop_in_place(&mut self[..]);
+                self.deallocate();
+            }
         }
     }
 }
@@ -1326,12 +1404,12 @@ impl<T> DoubleEndedIterator for IntoIter<T> {
 impl<T> Drop for IntoIter<T> {
     fn drop(&mut self) {
         unsafe {
-            let old_len = self.vec.len();
+            let old_cap = self.vec.capacity();
             let mut vec = mem::replace(&mut self.vec, ThinVec::new());
-            ptr::drop_in_place(&mut vec[self.start..]);
+            if old_cap > 0 {
+                ptr::drop_in_place(&mut vec[self.start..]);
 
-            // Don't mutate the empty singleton!
-            if old_len != 0 {
+                // Don't mutate the empty singleton!
                 vec.set_len(0)
             }
         }
