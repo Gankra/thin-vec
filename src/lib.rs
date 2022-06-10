@@ -29,7 +29,7 @@
 //! transferred across the FFI boundary (**IF YOU ARE CAREFUL, SEE BELOW!!**).
 //!
 //! While this feature is handy, it is also inherently dangerous to use because Rust and C++ do not
-//! know about eachother. Specifically, this can be an issue with non-POD types (types which
+//! know about each other. Specifically, this can be an issue with non-POD types (types which
 //! have destructors, move constructors, or are `!Copy`).
 //!
 //! ## Do Not Pass By Value
