@@ -1222,9 +1222,9 @@ impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for ThinVec<T> {
         use serde::de::{SeqAccess, Visitor};
         use serde::Deserialize;
 
-        struct ThinVecVisitor<'de, T: Deserialize<'de>>(PhantomData<(&'de (), T)>);
+        struct ThinVecVisitor<T>(PhantomData<T>);
 
-        impl<'de, T: Deserialize<'de>> Visitor<'de> for ThinVecVisitor<'de, T> {
+        impl<'de, T: Deserialize<'de>> Visitor<'de> for ThinVecVisitor<T> {
             type Value = ThinVec<T>;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
