@@ -19,3 +19,7 @@ default = []
 gecko-ffi = []
 
 [dependencies]
+serde = {version = "1.0", optional = true}
+
+[dev-dependencies]
+serde_test = "1.0"

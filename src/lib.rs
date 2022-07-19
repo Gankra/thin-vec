@@ -1201,6 +1201,57 @@ where
     }
 }
 
+// Serde impls based on
+// https://github.com/bluss/arrayvec/blob/67ec907a98c0f40c4b76066fed3c1af59d35cf6a/src/arrayvec.rs#L1222-L1267
+#[cfg(feature = "serde")]
+impl<T: serde::Serialize> serde::Serialize for ThinVec<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_seq(self.as_slice())
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for ThinVec<T> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{SeqAccess, Visitor};
+        use serde::Deserialize;
+
+        struct ThinVecVisitor<'de, T: Deserialize<'de>>(PhantomData<(&'de (), T)>);
+
+        impl<'de, T: Deserialize<'de>> Visitor<'de> for ThinVecVisitor<'de, T> {
+            type Value = ThinVec<T>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                write!(formatter, "a sequence")
+            }
+
+            fn visit_seq<SA>(self, mut seq: SA) -> Result<Self::Value, SA::Error>
+            where
+                SA: SeqAccess<'de>,
+            {
+                // Same policy as
+                // https://github.com/serde-rs/serde/blob/ce0844b9ecc32377b5e4545d759d385a8c46bc6a/serde/src/private/size_hint.rs#L13
+                let initial_capacity = seq.size_hint().unwrap_or_default().min(4096);
+                let mut values = ThinVec::<T>::with_capacity(initial_capacity);
+
+                while let Some(value) = seq.next_element()? {
+                    values.push(value);
+                }
+
+                Ok(values)
+            }
+        }
+
+        deserializer.deserialize_seq(ThinVecVisitor::<T>(PhantomData))
+    }
+}
+
 macro_rules! array_impls {
     ($($N:expr)*) => {$(
         impl<A, B> PartialEq<[B; $N]> for ThinVec<A> where A: PartialEq<B> {
@@ -2748,5 +2799,36 @@ mod std_tests {
 
         assert_eq!(padding::<Funky<[*mut usize; 1024]>>(), 128 - HEADER_SIZE);
         assert_aligned_head_ptr!(Funky<[*mut usize; 1024]>);
+    }
+
+    #[cfg(feature = "serde")]
+    use serde_test::{assert_tokens, Token};
+
+    #[test]
+    #[cfg(feature = "serde")]
+    fn test_ser_de_empty() {
+        let vec = ThinVec::<u32>::new();
+
+        assert_tokens(&vec, &[Token::Seq { len: Some(0) }, Token::SeqEnd]);
+    }
+
+    #[test]
+    #[cfg(feature = "serde")]
+    fn test_ser_de() {
+        let mut vec = ThinVec::<u32>::new();
+        vec.push(20);
+        vec.push(55);
+        vec.push(123);
+
+        assert_tokens(
+            &vec,
+            &[
+                Token::Seq { len: Some(3) },
+                Token::U32(20),
+                Token::U32(55),
+                Token::U32(123),
+                Token::SeqEnd,
+            ],
+        );
     }
 }
