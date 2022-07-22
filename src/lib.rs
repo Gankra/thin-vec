@@ -371,24 +371,24 @@ fn layout<T>(cap: usize) -> Layout {
 
 fn header_with_capacity<T>(cap: usize) -> NonNull<Header> {
     debug_assert!(cap > 0);
-    unsafe {
+    
         let layout = layout::<T>(cap);
-        let header = alloc(layout) as *mut Header;
+        let header = unsafe { alloc(layout) as *mut Header };
 
         if header.is_null() {
             handle_alloc_error(layout)
         }
 
         // "Infinite" capacity for zero-sized types:
-        (*header).set_cap(if mem::size_of::<T>() == 0 {
+        unsafe {(*header).set_cap(if mem::size_of::<T>() == 0 {
             MAX_CAP
         } else {
             cap
-        });
-        (*header).set_len(0);
+        })};
+        unsafe {(*header).set_len(0)};
 
-        NonNull::new_unchecked(header)
-    }
+        unsafe { NonNull::new_unchecked(header) }
+    
 }
 
 /// See the crate's top level documentation for a description of this type.
@@ -567,8 +567,8 @@ impl<T> ThinVec<T> {
         if old_len == self.capacity() {
             self.reserve(1);
         }
+        let ptr = self.data_raw();
         unsafe {
-            let ptr = self.data_raw();
             ptr::copy(ptr.add(idx), ptr.add(idx + 1), old_len - idx);
             ptr::write(ptr.add(idx), elem);
             self.set_len(old_len + 1);
@@ -594,8 +594,8 @@ impl<T> ThinVec<T> {
 
         assert!(idx < old_len, "Index out of bounds");
 
+        let ptr = self.data_raw();
         unsafe {
-            let ptr = self.data_raw();
             ptr::swap(ptr.add(idx), ptr.add(old_len - 1));
             self.set_len(old_len - 1);
             ptr::read(ptr.add(old_len - 1))
@@ -843,16 +843,16 @@ impl<T> ThinVec<T> {
         F: FnMut(&mut T, &mut T) -> bool,
     {
         // See the comments in `Vec::dedup` for a detailed explanation of this code.
+        let ln = self.len();
+        if ln <= 1 {
+            return;
+        }
+        // Avoid bounds checks by using raw pointers.
+        let p = self.as_mut_ptr();
+        let mut r: usize = 1;
+        let mut w: usize = 1;
         unsafe {
-            let ln = self.len();
-            if ln <= 1 {
-                return;
-            }
 
-            // Avoid bounds checks by using raw pointers.
-            let p = self.as_mut_ptr();
-            let mut r: usize = 1;
-            let mut w: usize = 1;
 
             while r < ln {
                 let p_r = p.add(r);
@@ -877,8 +877,8 @@ impl<T> ThinVec<T> {
 
         assert!(at <= old_len, "Index out of bounds");
 
+        let mut new_vec = ThinVec::with_capacity(new_vec_len);
         unsafe {
-            let mut new_vec = ThinVec::with_capacity(new_vec_len);
 
             ptr::copy_nonoverlapping(self.data_raw().add(at), new_vec.data_raw(), new_vec_len);
 
@@ -917,15 +917,15 @@ impl<T> ThinVec<T> {
         assert!(start <= end);
         assert!(end <= len);
 
-        unsafe {
+        
             // Set our length to the start bound
             // Don't mutate the empty singleton!
             if len != 0 {
-                self.set_len(start);
+                unsafe { self.set_len(start) };
             }
 
             let iter =
-                slice::from_raw_parts_mut(self.data_raw().add(start), end - start).iter_mut();
+                unsafe { slice::from_raw_parts_mut(self.data_raw().add(start), end - start).iter_mut() };
 
             Drain {
                 iter,
@@ -933,7 +933,7 @@ impl<T> ThinVec<T> {
                 end,
                 tail: len - end,
             }
-        }
+        
     }
 
     unsafe fn deallocate(&mut self) {
@@ -1298,9 +1298,9 @@ impl<T> Iterator for IntoIter<T> {
         if self.start == self.vec.len() {
             None
         } else {
+            let old_start = self.start;
+            self.start += 1;
             unsafe {
-                let old_start = self.start;
-                self.start += 1;
                 Some(ptr::read(self.vec.data_raw().add(old_start)))
             }
         }
@@ -1325,9 +1325,9 @@ impl<T> DoubleEndedIterator for IntoIter<T> {
 
 impl<T> Drop for IntoIter<T> {
     fn drop(&mut self) {
+        let old_len = self.vec.len();
+        let mut vec = mem::replace(&mut self.vec, ThinVec::new());
         unsafe {
-            let old_len = self.vec.len();
-            let mut vec = mem::replace(&mut self.vec, ThinVec::new());
             ptr::drop_in_place(&mut vec[self.start..]);
 
             // Don't mutate the empty singleton!
