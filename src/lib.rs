@@ -534,7 +534,13 @@ impl<T> ThinVec<T> {
     }
 
     pub unsafe fn set_len(&mut self, len: usize) {
-        self.header_mut().set_len(len)
+        if self.capacity() == 0 {
+            // A prerequisite of `Vec::set_len` is that `new_len` must be
+            // less than or equal to capacity(). The same applies here.
+            assert!(len == 0, "invalid set_len({}) on empty ThinVec", len);
+        } else {
+            self.header_mut().set_len(len)
+        }
     }
 
     pub fn push(&mut self, val: T) {
@@ -2748,5 +2754,22 @@ mod std_tests {
 
         assert_eq!(padding::<Funky<[*mut usize; 1024]>>(), 128 - HEADER_SIZE);
         assert_aligned_head_ptr!(Funky<[*mut usize; 1024]>);
+    }
+
+    #[test]
+    fn test_set_len() {
+        let mut vec: ThinVec<u32> = thin_vec![];
+        unsafe {
+            vec.set_len(0); // at one point this caused a crash
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid set_len(1) on empty ThinVec")]
+    fn test_set_len_invalid() {
+        let mut vec: ThinVec<u32> = thin_vec![];
+        unsafe {
+            vec.set_len(1);
+        }
     }
 }
