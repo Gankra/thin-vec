@@ -1118,6 +1118,7 @@ impl<T> AsRef<[T]> for ThinVec<T> {
 }
 
 impl<T> Extend<T> for ThinVec<T> {
+    #[inline]
     fn extend<I>(&mut self, iter: I)
     where
         I: IntoIterator<Item = T>,
