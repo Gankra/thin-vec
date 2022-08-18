@@ -988,9 +988,7 @@ impl<T> ThinVec<T> {
     #[cfg(feature = "gecko-ffi")]
     #[inline]
     fn is_singleton(&self) -> bool {
-        unsafe {
-            self.ptr.as_ptr() as *const Header == &EMPTY_HEADER
-        }
+        unsafe { self.ptr.as_ptr() as *const Header == &EMPTY_HEADER }
     }
 
     #[cfg(not(feature = "gecko-ffi"))]
@@ -1002,9 +1000,7 @@ impl<T> ThinVec<T> {
     #[cfg(feature = "gecko-ffi")]
     #[inline]
     fn has_allocation(&self) -> bool {
-        unsafe {
-            !self.is_singleton() && !self.ptr.as_ref().uses_stack_allocated_buffer()
-        }
+        unsafe { !self.is_singleton() && !self.ptr.as_ref().uses_stack_allocated_buffer() }
     }
 
     #[cfg(not(feature = "gecko-ffi"))]
@@ -1539,6 +1535,203 @@ mod tests {
         }
         for _ in v.drain(MAX_CAP - 1..) {}
         assert_eq!(v.len(), MAX_CAP - 1);
+    }
+
+    #[test]
+    fn test_clear() {
+        let mut v = ThinVec::<i32>::new();
+        assert_eq!(v.len(), 0);
+        assert_eq!(v.capacity(), 0);
+        assert_eq!(&v[..], &[]);
+
+        v.clear();
+        assert_eq!(v.len(), 0);
+        assert_eq!(v.capacity(), 0);
+        assert_eq!(&v[..], &[]);
+
+        v.push(1);
+        v.push(2);
+        assert_eq!(v.len(), 2);
+        assert!(v.capacity() >= 2);
+        assert_eq!(&v[..], &[1, 2]);
+
+        v.clear();
+        assert_eq!(v.len(), 0);
+        assert!(v.capacity() >= 2);
+        assert_eq!(&v[..], &[]);
+
+        v.push(3);
+        v.push(4);
+        assert_eq!(v.len(), 2);
+        assert!(v.capacity() >= 2);
+        assert_eq!(&v[..], &[3, 4]);
+
+        v.clear();
+        assert_eq!(v.len(), 0);
+        assert!(v.capacity() >= 2);
+        assert_eq!(&v[..], &[]);
+
+        v.clear();
+        assert_eq!(v.len(), 0);
+        assert!(v.capacity() >= 2);
+        assert_eq!(&v[..], &[]);
+    }
+
+    #[test]
+    fn test_empty_singleton_torture() {
+        {
+            let mut v = ThinVec::<i32>::new();
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert!(v.is_empty());
+            assert_eq!(&v[..], &[]);
+            assert_eq!(&mut v[..], &mut []);
+
+            assert_eq!(v.pop(), None);
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+        }
+
+        {
+            let v = ThinVec::<i32>::new();
+            assert_eq!(v.into_iter().count(), 0);
+
+            let v = ThinVec::<i32>::new();
+            for _ in v.into_iter() {
+                unreachable!();
+            }
+        }
+
+        {
+            let mut v = ThinVec::<i32>::new();
+            assert_eq!(v.drain(..).len(), 0);
+
+            for _ in v.drain(..) {
+                unreachable!()
+            }
+
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+        }
+
+        {
+            let mut v = ThinVec::<i32>::new();
+            v.truncate(1);
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+
+            v.truncate(0);
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+        }
+
+        {
+            let mut v = ThinVec::<i32>::new();
+            v.shrink_to_fit();
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+        }
+
+        {
+            let mut v = ThinVec::<i32>::new();
+            let new = v.split_off(0);
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+
+            assert_eq!(new.len(), 0);
+            assert_eq!(new.capacity(), 0);
+            assert_eq!(&new[..], &[]);
+        }
+
+        {
+            let mut v = ThinVec::<i32>::new();
+            let mut other = ThinVec::<i32>::new();
+            v.append(&mut other);
+
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+
+            assert_eq!(other.len(), 0);
+            assert_eq!(other.capacity(), 0);
+            assert_eq!(&other[..], &[]);
+        }
+
+        {
+            let mut v = ThinVec::<i32>::new();
+            v.reserve(0);
+
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+        }
+
+        {
+            let mut v = ThinVec::<i32>::new();
+            v.reserve_exact(0);
+
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+        }
+
+        {
+            let mut v = ThinVec::<i32>::new();
+            v.reserve(0);
+
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+        }
+
+        {
+            let v = ThinVec::<i32>::with_capacity(0);
+
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+        }
+
+        {
+            let v = ThinVec::<i32>::default();
+
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+        }
+
+        {
+            let mut v = ThinVec::<i32>::new();
+            v.retain(|_| unreachable!());
+
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+        }
+
+        {
+            let mut v = ThinVec::<i32>::new();
+            v.dedup_by_key(|x| *x);
+
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+        }
+
+        {
+            let mut v = ThinVec::<i32>::new();
+            v.dedup_by(|_, _| unreachable!());
+
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+        }
     }
 }
 
