@@ -1267,8 +1267,18 @@ where
     T: Clone,
 {
     fn clone(&self) -> ThinVec<T> {
-        let mut new_vec = ThinVec::with_capacity(self.len());
-        new_vec.extend(self.iter().cloned());
+        let len = self.len();
+        let mut new_vec = ThinVec::<T>::with_capacity(len);
+        let mut data_raw = new_vec.data_raw();
+        for x in self.iter() {
+            unsafe {
+                ptr::write(data_raw, x.clone());
+                data_raw = data_raw.add(1);
+            }
+        }
+        unsafe {
+            new_vec.set_len(len); // could be the singleton
+        }
         new_vec
     }
 }
