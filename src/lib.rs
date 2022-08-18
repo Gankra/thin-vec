@@ -534,13 +534,18 @@ impl<T> ThinVec<T> {
     }
 
     pub unsafe fn set_len(&mut self, len: usize) {
-        if self.capacity() == 0 {
+        if self.is_singleton() {
             // A prerequisite of `Vec::set_len` is that `new_len` must be
             // less than or equal to capacity(). The same applies here.
             assert!(len == 0, "invalid set_len({}) on empty ThinVec", len);
         } else {
             self.header_mut().set_len(len)
         }
+    }
+
+    // For internal use only, when setting the length and it's known to be the non-singleton.
+    unsafe fn set_len_non_singleton(&mut self, len: usize) {
+        self.header_mut().set_len(len)
     }
 
     pub fn push(&mut self, val: T) {
@@ -550,7 +555,7 @@ impl<T> ThinVec<T> {
         }
         unsafe {
             ptr::write(self.data_raw().add(old_len), val);
-            self.set_len(old_len + 1);
+            self.set_len_non_singleton(old_len + 1);
         }
     }
 
@@ -561,7 +566,7 @@ impl<T> ThinVec<T> {
         }
 
         unsafe {
-            self.set_len(old_len - 1);
+            self.set_len_non_singleton(old_len - 1);
             Some(ptr::read(self.data_raw().add(old_len - 1)))
         }
     }
@@ -577,7 +582,7 @@ impl<T> ThinVec<T> {
             let ptr = self.data_raw();
             ptr::copy(ptr.add(idx), ptr.add(idx + 1), old_len - idx);
             ptr::write(ptr.add(idx), elem);
-            self.set_len(old_len + 1);
+            self.set_len_non_singleton(old_len + 1);
         }
     }
 
@@ -587,7 +592,7 @@ impl<T> ThinVec<T> {
         assert!(idx < old_len, "Index out of bounds");
 
         unsafe {
-            self.set_len(old_len - 1);
+            self.set_len_non_singleton(old_len - 1);
             let ptr = self.data_raw();
             let val = ptr::read(self.data_raw().add(idx));
             ptr::copy(ptr.add(idx + 1), ptr.add(idx), old_len - idx - 1);
@@ -603,7 +608,7 @@ impl<T> ThinVec<T> {
         unsafe {
             let ptr = self.data_raw();
             ptr::swap(ptr.add(idx), ptr.add(old_len - 1));
-            self.set_len(old_len - 1);
+            self.set_len_non_singleton(old_len - 1);
             ptr::read(ptr.add(old_len - 1))
         }
     }
@@ -615,7 +620,7 @@ impl<T> ThinVec<T> {
                 // decrement len before the drop_in_place(), so a panic on Drop
                 // doesn't re-drop the just-failed value.
                 let new_len = self.len() - 1;
-                self.set_len(new_len);
+                self.set_len_non_singleton(new_len);
                 ptr::drop_in_place(self.data_raw().add(new_len));
             }
         }
@@ -624,11 +629,7 @@ impl<T> ThinVec<T> {
     pub fn clear(&mut self) {
         unsafe {
             ptr::drop_in_place(&mut self[..]);
-
-            // Don't mutate the empty singleton!
-            if !self.is_empty() {
-                self.set_len(0);
-            }
+            self.set_len(0); // could be the singleton
         }
     }
 
@@ -888,14 +889,8 @@ impl<T> ThinVec<T> {
 
             ptr::copy_nonoverlapping(self.data_raw().add(at), new_vec.data_raw(), new_vec_len);
 
-            // Don't mutate the empty singleton!
-            if new_vec_len != 0 {
-                new_vec.set_len(new_vec_len);
-            }
-
-            if old_len != 0 {
-                self.set_len(at);
-            }
+            new_vec.set_len(new_vec_len); // could be the singleton
+            self.set_len(at); // could be the singleton
 
             new_vec
         }
@@ -925,10 +920,7 @@ impl<T> ThinVec<T> {
 
         unsafe {
             // Set our length to the start bound
-            // Don't mutate the empty singleton!
-            if len != 0 {
-                self.set_len(start);
-            }
+            self.set_len(start); // could be the singleton
 
             let iter =
                 slice::from_raw_parts_mut(self.data_raw().add(start), end - start).iter_mut();
@@ -986,7 +978,7 @@ impl<T> ThinVec<T> {
                     .add(1)
                     .cast::<T>()
                     .copy_from_nonoverlapping(self.data_raw(), len);
-                self.set_len(0);
+                self.set_len_non_singleton(0);
             }
 
             self.ptr = new_header;
@@ -995,17 +987,30 @@ impl<T> ThinVec<T> {
 
     #[cfg(feature = "gecko-ffi")]
     #[inline]
+    fn is_singleton(&self) -> bool {
+        unsafe {
+            self.ptr.as_ptr() as *const Header == &EMPTY_HEADER
+        }
+    }
+
+    #[cfg(not(feature = "gecko-ffi"))]
+    #[inline]
+    fn is_singleton(&self) -> bool {
+        self.ptr.as_ptr() as *const Header == &EMPTY_HEADER
+    }
+
+    #[cfg(feature = "gecko-ffi")]
+    #[inline]
     fn has_allocation(&self) -> bool {
         unsafe {
-            self.ptr.as_ptr() as *const Header != &EMPTY_HEADER
-                && !self.ptr.as_ref().uses_stack_allocated_buffer()
+            !self.is_singleton() && !self.ptr.as_ref().uses_stack_allocated_buffer()
         }
     }
 
     #[cfg(not(feature = "gecko-ffi"))]
     #[inline]
     fn has_allocation(&self) -> bool {
-        self.ptr.as_ptr() as *const Header != &EMPTY_HEADER
+        !self.is_singleton()
     }
 }
 
@@ -1332,14 +1337,9 @@ impl<T> DoubleEndedIterator for IntoIter<T> {
 impl<T> Drop for IntoIter<T> {
     fn drop(&mut self) {
         unsafe {
-            let old_len = self.vec.len();
             let mut vec = mem::replace(&mut self.vec, ThinVec::new());
             ptr::drop_in_place(&mut vec[self.start..]);
-
-            // Don't mutate the empty singleton!
-            if old_len != 0 {
-                vec.set_len(0)
-            }
+            vec.set_len(0) // could be the singleton
         }
     }
 }
@@ -1373,12 +1373,12 @@ impl<'a, T> Drop for Drain<'a, T> {
             let vec = &mut *self.vec;
 
             // Don't mutate the empty singleton!
-            if vec.has_allocation() {
+            if !vec.is_singleton() {
                 let old_len = vec.len();
                 let start = vec.data_raw().add(old_len);
                 let end = vec.data_raw().add(self.end);
                 ptr::copy(end, start, self.tail);
-                vec.set_len(old_len + self.tail);
+                vec.set_len_non_singleton(old_len + self.tail);
             }
         }
     }
