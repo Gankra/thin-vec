@@ -900,7 +900,7 @@ impl<T> ThinVec<T> {
         self.extend(other.drain(..))
     }
 
-    pub fn drain<R>(&mut self, range: R) -> Drain<T>
+    pub fn drain<R>(&mut self, range: R) -> Drain<'_, T>
     where
         R: RangeBounds<usize>,
     {
@@ -1131,7 +1131,7 @@ impl<T> Extend<T> for ThinVec<T> {
 }
 
 impl<T: fmt::Debug> fmt::Debug for ThinVec<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&**self, f)
     }
 }
@@ -1292,7 +1292,7 @@ pub struct IntoIter<T> {
     start: usize,
 }
 
-pub struct Drain<'a, T: 'a> {
+pub struct Drain<'a, T> {
     iter: IterMut<'a, T>,
     vec: *mut ThinVec<T>,
     end: usize,
