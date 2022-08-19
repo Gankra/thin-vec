@@ -534,6 +534,17 @@ impl<T> ThinVec<T> {
     }
 
     pub unsafe fn set_len(&mut self, len: usize) {
+        if self.is_singleton() {
+            // A prerequisite of `Vec::set_len` is that `new_len` must be
+            // less than or equal to capacity(). The same applies here.
+            assert!(len == 0, "invalid set_len({}) on empty ThinVec", len);
+        } else {
+            self.header_mut().set_len(len)
+        }
+    }
+
+    // For internal use only, when setting the length and it's known to be the non-singleton.
+    unsafe fn set_len_non_singleton(&mut self, len: usize) {
         self.header_mut().set_len(len)
     }
 
@@ -544,7 +555,7 @@ impl<T> ThinVec<T> {
         }
         unsafe {
             ptr::write(self.data_raw().add(old_len), val);
-            self.set_len(old_len + 1);
+            self.set_len_non_singleton(old_len + 1);
         }
     }
 
@@ -555,7 +566,7 @@ impl<T> ThinVec<T> {
         }
 
         unsafe {
-            self.set_len(old_len - 1);
+            self.set_len_non_singleton(old_len - 1);
             Some(ptr::read(self.data_raw().add(old_len - 1)))
         }
     }
@@ -571,7 +582,7 @@ impl<T> ThinVec<T> {
             let ptr = self.data_raw();
             ptr::copy(ptr.add(idx), ptr.add(idx + 1), old_len - idx);
             ptr::write(ptr.add(idx), elem);
-            self.set_len(old_len + 1);
+            self.set_len_non_singleton(old_len + 1);
         }
     }
 
@@ -581,7 +592,7 @@ impl<T> ThinVec<T> {
         assert!(idx < old_len, "Index out of bounds");
 
         unsafe {
-            self.set_len(old_len - 1);
+            self.set_len_non_singleton(old_len - 1);
             let ptr = self.data_raw();
             let val = ptr::read(self.data_raw().add(idx));
             ptr::copy(ptr.add(idx + 1), ptr.add(idx), old_len - idx - 1);
@@ -597,7 +608,7 @@ impl<T> ThinVec<T> {
         unsafe {
             let ptr = self.data_raw();
             ptr::swap(ptr.add(idx), ptr.add(old_len - 1));
-            self.set_len(old_len - 1);
+            self.set_len_non_singleton(old_len - 1);
             ptr::read(ptr.add(old_len - 1))
         }
     }
@@ -609,7 +620,7 @@ impl<T> ThinVec<T> {
                 // decrement len before the drop_in_place(), so a panic on Drop
                 // doesn't re-drop the just-failed value.
                 let new_len = self.len() - 1;
-                self.set_len(new_len);
+                self.set_len_non_singleton(new_len);
                 ptr::drop_in_place(self.data_raw().add(new_len));
             }
         }
@@ -618,11 +629,7 @@ impl<T> ThinVec<T> {
     pub fn clear(&mut self) {
         unsafe {
             ptr::drop_in_place(&mut self[..]);
-
-            // Don't mutate the empty singleton!
-            if !self.is_empty() {
-                self.set_len(0);
-            }
+            self.set_len(0); // could be the singleton
         }
     }
 
@@ -882,14 +889,8 @@ impl<T> ThinVec<T> {
 
             ptr::copy_nonoverlapping(self.data_raw().add(at), new_vec.data_raw(), new_vec_len);
 
-            // Don't mutate the empty singleton!
-            if new_vec_len != 0 {
-                new_vec.set_len(new_vec_len);
-            }
-
-            if old_len != 0 {
-                self.set_len(at);
-            }
+            new_vec.set_len(new_vec_len); // could be the singleton
+            self.set_len(at); // could be the singleton
 
             new_vec
         }
@@ -899,7 +900,7 @@ impl<T> ThinVec<T> {
         self.extend(other.drain(..))
     }
 
-    pub fn drain<R>(&mut self, range: R) -> Drain<T>
+    pub fn drain<R>(&mut self, range: R) -> Drain<'_, T>
     where
         R: RangeBounds<usize>,
     {
@@ -919,10 +920,7 @@ impl<T> ThinVec<T> {
 
         unsafe {
             // Set our length to the start bound
-            // Don't mutate the empty singleton!
-            if len != 0 {
-                self.set_len(start);
-            }
+            self.set_len(start); // could be the singleton
 
             let iter =
                 slice::from_raw_parts_mut(self.data_raw().add(start), end - start).iter_mut();
@@ -980,7 +978,7 @@ impl<T> ThinVec<T> {
                     .add(1)
                     .cast::<T>()
                     .copy_from_nonoverlapping(self.data_raw(), len);
-                self.set_len(0);
+                self.set_len_non_singleton(0);
             }
 
             self.ptr = new_header;
@@ -989,17 +987,26 @@ impl<T> ThinVec<T> {
 
     #[cfg(feature = "gecko-ffi")]
     #[inline]
+    fn is_singleton(&self) -> bool {
+        unsafe { self.ptr.as_ptr() as *const Header == &EMPTY_HEADER }
+    }
+
+    #[cfg(not(feature = "gecko-ffi"))]
+    #[inline]
+    fn is_singleton(&self) -> bool {
+        self.ptr.as_ptr() as *const Header == &EMPTY_HEADER
+    }
+
+    #[cfg(feature = "gecko-ffi")]
+    #[inline]
     fn has_allocation(&self) -> bool {
-        unsafe {
-            self.ptr.as_ptr() as *const Header != &EMPTY_HEADER
-                && !self.ptr.as_ref().uses_stack_allocated_buffer()
-        }
+        unsafe { !self.is_singleton() && !self.ptr.as_ref().uses_stack_allocated_buffer() }
     }
 
     #[cfg(not(feature = "gecko-ffi"))]
     #[inline]
     fn has_allocation(&self) -> bool {
-        self.ptr.as_ptr() as *const Header != &EMPTY_HEADER
+        !self.is_singleton()
     }
 }
 
@@ -1111,6 +1118,7 @@ impl<T> AsRef<[T]> for ThinVec<T> {
 }
 
 impl<T> Extend<T> for ThinVec<T> {
+    #[inline]
     fn extend<I>(&mut self, iter: I)
     where
         I: IntoIterator<Item = T>,
@@ -1124,7 +1132,7 @@ impl<T> Extend<T> for ThinVec<T> {
 }
 
 impl<T: fmt::Debug> fmt::Debug for ThinVec<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&**self, f)
     }
 }
@@ -1310,8 +1318,18 @@ where
     T: Clone,
 {
     fn clone(&self) -> ThinVec<T> {
-        let mut new_vec = ThinVec::with_capacity(self.len());
-        new_vec.extend(self.iter().cloned());
+        let len = self.len();
+        let mut new_vec = ThinVec::<T>::with_capacity(len);
+        let mut data_raw = new_vec.data_raw();
+        for x in self.iter() {
+            unsafe {
+                ptr::write(data_raw, x.clone());
+                data_raw = data_raw.add(1);
+            }
+        }
+        unsafe {
+            new_vec.set_len(len); // could be the singleton
+        }
         new_vec
     }
 }
@@ -1336,7 +1354,7 @@ pub struct IntoIter<T> {
     start: usize,
 }
 
-pub struct Drain<'a, T: 'a> {
+pub struct Drain<'a, T> {
     iter: IterMut<'a, T>,
     vec: *mut ThinVec<T>,
     end: usize,
@@ -1377,14 +1395,9 @@ impl<T> DoubleEndedIterator for IntoIter<T> {
 impl<T> Drop for IntoIter<T> {
     fn drop(&mut self) {
         unsafe {
-            let old_len = self.vec.len();
             let mut vec = mem::replace(&mut self.vec, ThinVec::new());
             ptr::drop_in_place(&mut vec[self.start..]);
-
-            // Don't mutate the empty singleton!
-            if old_len != 0 {
-                vec.set_len(0)
-            }
+            vec.set_len(0) // could be the singleton
         }
     }
 }
@@ -1418,12 +1431,12 @@ impl<'a, T> Drop for Drain<'a, T> {
             let vec = &mut *self.vec;
 
             // Don't mutate the empty singleton!
-            if vec.has_allocation() {
+            if !vec.is_singleton() {
                 let old_len = vec.len();
                 let start = vec.data_raw().add(old_len);
                 let end = vec.data_raw().add(self.end);
                 ptr::copy(end, start, self.tail);
-                vec.set_len(old_len + self.tail);
+                vec.set_len_non_singleton(old_len + self.tail);
             }
         }
     }
@@ -1584,6 +1597,203 @@ mod tests {
         }
         for _ in v.drain(MAX_CAP - 1..) {}
         assert_eq!(v.len(), MAX_CAP - 1);
+    }
+
+    #[test]
+    fn test_clear() {
+        let mut v = ThinVec::<i32>::new();
+        assert_eq!(v.len(), 0);
+        assert_eq!(v.capacity(), 0);
+        assert_eq!(&v[..], &[]);
+
+        v.clear();
+        assert_eq!(v.len(), 0);
+        assert_eq!(v.capacity(), 0);
+        assert_eq!(&v[..], &[]);
+
+        v.push(1);
+        v.push(2);
+        assert_eq!(v.len(), 2);
+        assert!(v.capacity() >= 2);
+        assert_eq!(&v[..], &[1, 2]);
+
+        v.clear();
+        assert_eq!(v.len(), 0);
+        assert!(v.capacity() >= 2);
+        assert_eq!(&v[..], &[]);
+
+        v.push(3);
+        v.push(4);
+        assert_eq!(v.len(), 2);
+        assert!(v.capacity() >= 2);
+        assert_eq!(&v[..], &[3, 4]);
+
+        v.clear();
+        assert_eq!(v.len(), 0);
+        assert!(v.capacity() >= 2);
+        assert_eq!(&v[..], &[]);
+
+        v.clear();
+        assert_eq!(v.len(), 0);
+        assert!(v.capacity() >= 2);
+        assert_eq!(&v[..], &[]);
+    }
+
+    #[test]
+    fn test_empty_singleton_torture() {
+        {
+            let mut v = ThinVec::<i32>::new();
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert!(v.is_empty());
+            assert_eq!(&v[..], &[]);
+            assert_eq!(&mut v[..], &mut []);
+
+            assert_eq!(v.pop(), None);
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+        }
+
+        {
+            let v = ThinVec::<i32>::new();
+            assert_eq!(v.into_iter().count(), 0);
+
+            let v = ThinVec::<i32>::new();
+            for _ in v.into_iter() {
+                unreachable!();
+            }
+        }
+
+        {
+            let mut v = ThinVec::<i32>::new();
+            assert_eq!(v.drain(..).len(), 0);
+
+            for _ in v.drain(..) {
+                unreachable!()
+            }
+
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+        }
+
+        {
+            let mut v = ThinVec::<i32>::new();
+            v.truncate(1);
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+
+            v.truncate(0);
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+        }
+
+        {
+            let mut v = ThinVec::<i32>::new();
+            v.shrink_to_fit();
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+        }
+
+        {
+            let mut v = ThinVec::<i32>::new();
+            let new = v.split_off(0);
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+
+            assert_eq!(new.len(), 0);
+            assert_eq!(new.capacity(), 0);
+            assert_eq!(&new[..], &[]);
+        }
+
+        {
+            let mut v = ThinVec::<i32>::new();
+            let mut other = ThinVec::<i32>::new();
+            v.append(&mut other);
+
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+
+            assert_eq!(other.len(), 0);
+            assert_eq!(other.capacity(), 0);
+            assert_eq!(&other[..], &[]);
+        }
+
+        {
+            let mut v = ThinVec::<i32>::new();
+            v.reserve(0);
+
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+        }
+
+        {
+            let mut v = ThinVec::<i32>::new();
+            v.reserve_exact(0);
+
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+        }
+
+        {
+            let mut v = ThinVec::<i32>::new();
+            v.reserve(0);
+
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+        }
+
+        {
+            let v = ThinVec::<i32>::with_capacity(0);
+
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+        }
+
+        {
+            let v = ThinVec::<i32>::default();
+
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+        }
+
+        {
+            let mut v = ThinVec::<i32>::new();
+            v.retain(|_| unreachable!());
+
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+        }
+
+        {
+            let mut v = ThinVec::<i32>::new();
+            v.dedup_by_key(|x| *x);
+
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+        }
+
+        {
+            let mut v = ThinVec::<i32>::new();
+            v.dedup_by(|_, _| unreachable!());
+
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+        }
     }
 }
 
@@ -2801,6 +3011,7 @@ mod std_tests {
         assert_aligned_head_ptr!(Funky<[*mut usize; 1024]>);
     }
 
+
     #[cfg(feature = "serde")]
     use serde_test::{assert_tokens, Token};
 
@@ -2830,5 +3041,22 @@ mod std_tests {
                 Token::SeqEnd,
             ],
         );
+    }
+
+    #[test]
+    fn test_set_len() {
+        let mut vec: ThinVec<u32> = thin_vec![];
+        unsafe {
+            vec.set_len(0); // at one point this caused a crash
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid set_len(1) on empty ThinVec")]
+    fn test_set_len_invalid() {
+        let mut vec: ThinVec<u32> = thin_vec![];
+        unsafe {
+            vec.set_len(1);
+        }
     }
 }
