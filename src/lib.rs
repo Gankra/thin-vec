@@ -3011,7 +3011,6 @@ mod std_tests {
         assert_aligned_head_ptr!(Funky<[*mut usize; 1024]>);
     }
 
-
     #[cfg(feature = "serde")]
     use serde_test::{assert_tokens, Token};
 
