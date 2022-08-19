@@ -845,6 +845,7 @@ impl<T> ThinVec<T> {
     /// assert_eq!(vec, ["foo", "bar", "baz", "bar"]);
     /// # }
     /// ```
+    #[allow(clippy::swap_ptr_to_ref)]
     pub fn dedup_by<F>(&mut self, mut same_bucket: F)
     where
         F: FnMut(&mut T, &mut T) -> bool,
