@@ -1134,7 +1134,10 @@ impl<T> Extend<T> for ThinVec<T> {
         I: IntoIterator<Item = T>,
     {
         let iter = iter.into_iter();
-        self.reserve(iter.size_hint().0);
+        let hint = iter.size_hint().0;
+        if hint > 0 {
+            self.reserve(hint);
+        }
         for x in iter {
             self.push(x);
         }
