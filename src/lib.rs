@@ -1416,11 +1416,20 @@ impl<T> DoubleEndedIterator for IntoIter<T> {
 }
 
 impl<T> Drop for IntoIter<T> {
+    #[inline]
     fn drop(&mut self) {
-        unsafe {
-            let mut vec = mem::replace(&mut self.vec, ThinVec::new());
-            ptr::drop_in_place(&mut vec[self.start..]);
-            vec.set_len(0) // could be the singleton
+        #[cold]
+        #[inline(never)]
+        fn drop_non_singleton<T>(this: &mut IntoIter<T>) {
+            unsafe {
+                let mut vec = mem::replace(&mut this.vec, ThinVec::new());
+                ptr::drop_in_place(&mut vec[this.start..]);
+                vec.set_len_non_singleton(0)
+            }
+        }
+
+        if !self.vec.is_singleton() {
+            drop_non_singleton(self);
         }
     }
 }
