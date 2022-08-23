@@ -1327,20 +1327,33 @@ impl<T> Clone for ThinVec<T>
 where
     T: Clone,
 {
+    #[inline]
     fn clone(&self) -> ThinVec<T> {
-        let len = self.len();
-        let mut new_vec = ThinVec::<T>::with_capacity(len);
-        let mut data_raw = new_vec.data_raw();
-        for x in self.iter() {
-            unsafe {
-                ptr::write(data_raw, x.clone());
-                data_raw = data_raw.add(1);
+        #[cold]
+        #[inline(never)]
+        fn clone_non_singleton<T: Clone>(this: &ThinVec<T>) -> ThinVec<T> {
+            let len = this.len();
+            let mut new_vec = ThinVec::<T>::with_capacity(len);
+            let mut data_raw = new_vec.data_raw();
+            for x in this.iter() {
+                unsafe {
+                    ptr::write(data_raw, x.clone());
+                    data_raw = data_raw.add(1);
+                }
             }
+            unsafe {
+                // `this` is not the singleton, but `new_vec` will be if
+                // `this` is empty.
+                new_vec.set_len(len); // could be the singleton
+            }
+            new_vec
         }
-        unsafe {
-            new_vec.set_len(len); // could be the singleton
+
+        if self.is_singleton() {
+            ThinVec::new()
+        } else {
+            clone_non_singleton(self)
         }
-        new_vec
     }
 }
 
