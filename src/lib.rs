@@ -935,12 +935,6 @@ impl<T> ThinVec<T> {
         }
     }
 
-    unsafe fn deallocate(&mut self) {
-        if self.has_allocation() {
-            dealloc(self.ptr() as *mut u8, layout::<T>(self.capacity()))
-        }
-    }
-
     /// Resize the buffer and update its capacity, without changing the length.
     /// Unsafe because it can cause length to be greater than capacity.
     unsafe fn reallocate(&mut self, new_cap: usize) {
@@ -1078,10 +1072,25 @@ impl<T: PartialEq> ThinVec<T> {
 }
 
 impl<T> Drop for ThinVec<T> {
+    #[inline]
     fn drop(&mut self) {
-        unsafe {
-            ptr::drop_in_place(&mut self[..]);
-            self.deallocate();
+        #[cold]
+        #[inline(never)]
+        fn drop_non_singleton<T>(this: &mut ThinVec<T>) {
+            unsafe {
+                ptr::drop_in_place(&mut this[..]);
+
+                #[cfg(feature = "gecko-ffi")]
+                if this.ptr.as_ref().uses_stack_allocated_buffer() {
+                    return;
+                }
+
+                dealloc(this.ptr() as *mut u8, layout::<T>(this.capacity()))
+            }
+        }
+
+        if !self.is_singleton() {
+            drop_non_singleton(self);
         }
     }
 }
