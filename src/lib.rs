@@ -1829,6 +1829,27 @@ mod tests {
             assert_eq!(v.capacity(), 0);
             assert_eq!(&v[..], &[]);
         }
+
+        {
+            let v = ThinVec::<i32>::new();
+            let v = v.clone();
+
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+        }
+    }
+
+    #[test]
+    fn test_clone() {
+        let mut v = ThinVec::<i32>::new();
+        assert!(v.is_singleton());
+        v.push(0);
+        v.pop();
+        assert!(!v.is_singleton());
+
+        let v2 = v.clone();
+        assert!(v2.is_singleton());
     }
 }
 
