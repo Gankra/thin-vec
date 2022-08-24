@@ -13,9 +13,14 @@ readme = "README.md"
 unstable = []
 default = []
 
-# Gecko specific features. These features cause thin-vec to have the same layout
-# and behaviour as nsTArray, allowing it to be used in C++ FFI. Requires
-# the empty header to be statically linked in with the symbol name "sEmptyTArrayHeader"
+# Use a u32 for the length and capacity. This restricts each thin-vec to 4.2
+# billion elements.
+u32-len-cap = []
+
+# Gecko specific features. These features cause thin-vec to have the same
+# layout and behaviour as nsTArray, allowing it to be used in C++ FFI. (This
+# means it effectively implies `u32-cap-len`.) Requires the empty header to be
+# statically linked in with the symbol name "sEmptyTArrayHeader"
 gecko-ffi = []
 
 [dependencies]

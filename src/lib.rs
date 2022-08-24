@@ -19,7 +19,14 @@
 //! * ThinVec currently doesn't bother to not-allocate for Zero Sized Types (e.g. `ThinVec<()>`),
 //!   but it could be done if someone cared enough to implement it.
 //!
+//! # `u32-len-cap`
 //!
+//! If you enable this feature, the capacity and length are stored as `u32` values. This saves 8
+//! bytes of memory per non-empty ThinVec, at the cost of limiting the number of elements to 4.2
+//! billion.
+//!
+//! This feature is implied by the gecko-ffi feature, because nsTArray uses `u32` values to store
+//! the capacity and length.
 //!
 //! # Gecko FFI
 //!
@@ -157,7 +164,7 @@ use impl_details::*;
 
 // modules: a simple way to cfg a whole bunch of impl details at once
 
-#[cfg(not(feature = "gecko-ffi"))]
+#[cfg(all(not(feature = "u32-len-cap"), not(feature = "gecko-ffi")))]
 mod impl_details {
     pub type SizeType = usize;
     pub const MAX_CAP: usize = !0;
@@ -165,6 +172,22 @@ mod impl_details {
     #[inline(always)]
     pub fn assert_size(x: usize) -> SizeType {
         x
+    }
+}
+
+#[cfg(all(feature = "u32-len-cap", not(feature = "gecko-ffi")))]
+mod impl_details {
+    pub type SizeType = u32;
+    pub const MAX_CAP: usize = u32::max_value() as usize;
+
+    #[inline(always)]
+    pub fn assert_size(x: usize) -> SizeType {
+        if x > MAX_CAP as usize {
+            panic!(
+                "ThinVec size (with the u32-len-cap feature) may not exceed the capacity of a u32"
+            );
+        }
+        x as SizeType
     }
 }
 
@@ -241,7 +264,7 @@ mod impl_details {
     #[inline]
     pub fn assert_size(x: usize) -> SizeType {
         if x > MAX_CAP as usize {
-            panic!("nsTArray size may not exceed the capacity of a 32-bit sized int");
+            panic!("nsTArray size may not exceed the capacity of an i32");
         }
         x as SizeType
     }
@@ -2436,19 +2459,19 @@ mod std_tests {
     #[test]
     #[cfg(not(feature = "gecko-ffi"))]
     fn test_drain_max_vec_size() {
-        let mut v = ThinVec::<()>::with_capacity(usize::max_value());
+        let mut v = ThinVec::<()>::with_capacity(MAX_CAP);
         unsafe {
-            v.set_len(usize::max_value());
+            v.set_len(MAX_CAP);
         }
-        for _ in v.drain(usize::max_value() - 1..) {}
-        assert_eq!(v.len(), usize::max_value() - 1);
+        for _ in v.drain(MAX_CAP - 1..) {}
+        assert_eq!(v.len(), MAX_CAP - 1);
 
-        let mut v = ThinVec::<()>::with_capacity(usize::max_value());
+        let mut v = ThinVec::<()>::with_capacity(MAX_CAP);
         unsafe {
-            v.set_len(usize::max_value());
+            v.set_len(MAX_CAP);
         }
-        for _ in v.drain(usize::max_value() - 1..=usize::max_value() - 1) {}
-        assert_eq!(v.len(), usize::max_value() - 1);
+        for _ in v.drain(MAX_CAP - 1..=MAX_CAP - 1) {}
+        assert_eq!(v.len(), MAX_CAP - 1);
     }
 
     #[test]
@@ -3062,7 +3085,7 @@ mod std_tests {
         }
 
         const HEADER_SIZE: usize = std::mem::size_of::<Header>();
-        assert_eq!(2 * std::mem::size_of::<usize>(), HEADER_SIZE);
+        assert_eq!(2 * std::mem::size_of::<SizeType>(), HEADER_SIZE);
 
         #[repr(C, align(128))]
         struct Funky<T>(T);

@@ -22,6 +22,8 @@ jobs:
           cargo miri setup
       - name: Test (default) with Miri
         run: MIRIFLAGS=-Zmiri-strict-provenance cargo miri test
+      - name: Test (u32-len-cap) with Miri
+        run: MIRIFLAGS=-Zmiri-strict-provenance cargo miri test --features=u32-len-cap
       - name: Test (gecko-ffi) with Miri
         run: MIRIFLAGS=-Zmiri-strict-provenance cargo miri test --features=gecko-ffi
       
