@@ -20,8 +20,10 @@ jobs:
           rustup toolchain install nightly --component miri
           rustup override set nightly
           cargo miri setup
-      - name: Test with Miri
+      - name: Test (default) with Miri
         run: MIRIFLAGS=-Zmiri-strict-provenance cargo miri test
+      - name: Test (gecko-ffi) with Miri
+        run: MIRIFLAGS=-Zmiri-strict-provenance cargo miri test --features=gecko-ffi
       
   build:
     runs-on: ubuntu-latest

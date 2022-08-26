@@ -403,7 +403,9 @@ unsafe impl<T: Send> Send for ThinVec<T> {}
 
 /// Creates a `ThinVec` containing the arguments.
 ///
-/// ```
+// A hack to avoid linking problems with `cargo test --features=gecko-ffi`.
+#[cfg_attr(not(feature = "gecko-ffi"), doc = "```")]
+#[cfg_attr(feature = "gecko-ffi", doc = "```ignore")]
 /// #[macro_use] extern crate thin_vec;
 ///
 /// fn main() {
@@ -771,7 +773,9 @@ impl<T> ThinVec<T> {
     ///
     /// # Examples
     ///
-    /// ```
+    // A hack to avoid linking problems with `cargo test --features=gecko-ffi`.
+    #[cfg_attr(not(feature = "gecko-ffi"), doc = "```")]
+    #[cfg_attr(feature = "gecko-ffi", doc = "```ignore")]
     /// # #[macro_use] extern crate thin_vec;
     /// # fn main() {
     /// let mut vec = thin_vec![1, 2, 3, 4];
@@ -807,7 +811,9 @@ impl<T> ThinVec<T> {
     ///
     /// # Examples
     ///
-    /// ```
+    // A hack to avoid linking problems with `cargo test --features=gecko-ffi`.
+    #[cfg_attr(not(feature = "gecko-ffi"), doc = "```")]
+    #[cfg_attr(feature = "gecko-ffi", doc = "```ignore")]
     /// # #[macro_use] extern crate thin_vec;
     /// # fn main() {
     /// let mut vec = thin_vec![10, 20, 21, 30, 20];
@@ -835,7 +841,9 @@ impl<T> ThinVec<T> {
     ///
     /// # Examples
     ///
-    /// ```
+    // A hack to avoid linking problems with `cargo test --features=gecko-ffi`.
+    #[cfg_attr(not(feature = "gecko-ffi"), doc = "```")]
+    #[cfg_attr(feature = "gecko-ffi", doc = "```ignore")]
     /// # #[macro_use] extern crate thin_vec;
     /// # fn main() {
     /// let mut vec = thin_vec!["foo", "bar", "Bar", "baz", "bar"];
@@ -1014,7 +1022,9 @@ impl<T: Clone> ThinVec<T> {
     ///
     /// # Examples
     ///
-    /// ```
+    // A hack to avoid linking problems with `cargo test --features=gecko-ffi`.
+    #[cfg_attr(not(feature = "gecko-ffi"), doc = "```")]
+    #[cfg_attr(feature = "gecko-ffi", doc = "```ignore")]
     /// # #[macro_use] extern crate thin_vec;
     /// # fn main() {
     /// let mut vec = thin_vec!["hello"];
@@ -1056,7 +1066,9 @@ impl<T: PartialEq> ThinVec<T> {
     ///
     /// # Examples
     ///
-    /// ```
+    // A hack to avoid linking problems with `cargo test --features=gecko-ffi`.
+    #[cfg_attr(not(feature = "gecko-ffi"), doc = "```")]
+    #[cfg_attr(feature = "gecko-ffi", doc = "```ignore")]
     /// # #[macro_use] extern crate thin_vec;
     /// # fn main() {
     /// let mut vec = thin_vec![1, 2, 2, 3, 2];
