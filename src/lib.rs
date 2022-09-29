@@ -787,13 +787,41 @@ impl<T> ThinVec<T> {
     where
         F: FnMut(&T) -> bool,
     {
+        self.retain_mut(|x| f(&*x));
+    }
+
+    /// Retains only the elements specified by the predicate, passing a mutable reference to it.
+    ///
+    /// In other words, remove all elements `e` such that `f(&mut e)` returns `false`.
+    /// This method operates in place and preserves the order of the retained
+    /// elements.
+    ///
+    /// # Examples
+    ///
+    // A hack to avoid linking problems with `cargo test --features=gecko-ffi`.
+    #[cfg_attr(not(feature = "gecko-ffi"), doc = "```")]
+    #[cfg_attr(feature = "gecko-ffi", doc = "```ignore")]
+    /// # #[macro_use] extern crate thin_vec;
+    /// # fn main() {
+    /// let mut vec = thin_vec![1, 2, 3, 4, 5];
+    /// vec.retain_mut(|x| {
+    ///     *x += 1;
+    ///     (*x)%2 == 0
+    /// });
+    /// assert_eq!(vec, [2, 4, 6]);
+    /// # }
+    /// ```
+    pub fn retain_mut<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut T) -> bool,
+    {
         let len = self.len();
         let mut del = 0;
         {
             let v = &mut self[..];
 
             for i in 0..len {
-                if !f(&v[i]) {
+                if !f(&mut v[i]) {
                     del += 1;
                 } else if del > 0 {
                     v.swap(i - del, i);
@@ -1826,6 +1854,15 @@ mod tests {
 
         {
             let mut v = ThinVec::<i32>::new();
+            v.retain_mut(|_| unreachable!());
+
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+        }
+
+        {
+            let mut v = ThinVec::<i32>::new();
             v.dedup_by_key(|x| *x);
 
             assert_eq!(v.len(), 0);
@@ -2099,6 +2136,18 @@ mod std_tests {
         let mut vec = thin_vec![1, 2, 3, 4];
         vec.retain(|&x| x % 2 == 0);
         assert_eq!(vec, [2, 4]);
+    }
+
+    #[test]
+    fn test_retain_mut() {
+        let mut vec = thin_vec![9, 9, 9, 9];
+        let mut i = 0;
+        vec.retain_mut(|x| {
+            i += 1;
+            *x = i;
+            i != 4
+        });
+        assert_eq!(vec, [1, 2, 3]);
     }
 
     #[test]
