@@ -331,22 +331,26 @@ extern "C" {
     static EMPTY_HEADER: Header;
 }
 
-// TODO: overflow checks everywhere
-
 // Utils for computing layouts of allocations
 
 fn alloc_size<T>(cap: usize) -> usize {
     // Compute "real" header size with pointer math
-    let header_size = mem::size_of::<Header>();
-    let elem_size = mem::size_of::<T>();
-    let padding = padding::<T>();
+    //
+    // We turn everything into isizes here so that we can catch isize::MAX overflow,
+    // we never want to allow allocations larger than that!
+    let cap = cap as isize;
+    let header_size = mem::size_of::<Header>() as isize;
+    let elem_size = mem::size_of::<T>() as isize;
+    let padding = padding::<T>() as isize;
 
-    // TODO: care about isize::MAX overflow?
     let data_size = elem_size.checked_mul(cap).expect("capacity overflow");
 
-    data_size
+    let final_size = data_size
         .checked_add(header_size + padding)
-        .expect("capacity overflow")
+        .expect("capacity overflow");
+
+    // Ok now we can turn it back into a usize (don't need to worry about negatives)
+    final_size as usize
 }
 
 fn padding<T>() -> usize {
@@ -501,7 +505,7 @@ impl<T> ThinVec<T> {
     /// // A vector of a zero-sized type will always over-allocate, since no
     /// // space is needed to store the actual elements.
     /// let vec_units = ThinVec::<()>::with_capacity(10);
-    /// 
+    ///
     /// // Only true **without** the gecko-ffi feature!
     /// // assert_eq!(vec_units.capacity(), usize::MAX);
     /// ```
