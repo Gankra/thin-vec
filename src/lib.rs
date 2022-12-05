@@ -1438,6 +1438,53 @@ impl<T> ThinVec<T> {
         }
     }
 
+    /// Creates a splicing iterator that replaces the specified range in the vector
+    /// with the given `replace_with` iterator and yields the removed items.
+    /// `replace_with` does not need to be the same length as `range`.
+    ///
+    /// `range` is removed even if the iterator is not consumed until the end.
+    ///
+    /// It is unspecified how many elements are removed from the vector
+    /// if the `Splice` value is leaked.
+    ///
+    /// The input iterator `replace_with` is only consumed when the `Splice` value is dropped.
+    ///
+    /// This is optimal if:
+    ///
+    /// * The tail (elements in the vector after `range`) is empty,
+    /// * or `replace_with` yields fewer or equal elements than `range`’s length
+    /// * or the lower bound of its `size_hint()` is exact.
+    ///
+    /// Otherwise, a temporary vector is allocated and the tail is moved twice.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the starting point is greater than the end point or if
+    /// the end point is greater than the length of the vector.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thin_vec::{ThinVec, thin_vec};
+    ///
+    /// let mut v = thin_vec![1, 2, 3, 4];
+    /// let new = [7, 8, 9];
+    /// let u: ThinVec<_> = v.splice(1..3, new).collect();
+    /// assert_eq!(v, &[1, 7, 8, 9, 4]);
+    /// assert_eq!(u, &[2, 3]);
+    /// ```
+    #[inline]
+    pub fn splice<R, I>(&mut self, range: R, replace_with: I) -> Splice<'_, I::IntoIter>
+    where
+        R: RangeBounds<usize>,
+        I: IntoIterator<Item = T>,
+    {
+        Splice {
+            drain: self.drain(range),
+            replace_with: replace_with.into_iter(),
+        }
+    }
+
     /// Resize the buffer and update its capacity, without changing the length.
     /// Unsafe because it can cause length to be greater than capacity.
     unsafe fn reallocate(&mut self, new_cap: usize) {
@@ -2412,6 +2459,133 @@ impl<'a, T> AsRef<[T]> for Drain<'a, T> {
     }
 }
 
+/// A splicing iterator for `ThinVec`.
+///
+/// This struct is created by [`ThinVec::splice`][].
+/// See its documentation for more.
+///
+/// # Example
+///
+/// ```
+/// use thin_vec::thin_vec;
+///
+/// let mut v = thin_vec![0, 1, 2];
+/// let new = [7, 8];
+/// let iter: thin_vec::Splice<_> = v.splice(1.., new);
+/// ```
+#[derive(Debug)]
+pub struct Splice<'a, I: Iterator + 'a> {
+    drain: Drain<'a, I::Item>,
+    replace_with: I,
+}
+
+impl<I: Iterator> Iterator for Splice<'_, I> {
+    type Item = I::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.drain.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.drain.size_hint()
+    }
+}
+
+impl<I: Iterator> DoubleEndedIterator for Splice<'_, I> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.drain.next_back()
+    }
+}
+
+impl<I: Iterator> ExactSizeIterator for Splice<'_, I> {}
+
+impl<I: Iterator> Drop for Splice<'_, I> {
+    fn drop(&mut self) {
+        // Ensure we've fully drained out the range
+        self.drain.by_ref().for_each(drop);
+
+        unsafe {
+            // If there's no tail elements, then the inner ThinVec is already
+            // correct and we can just extend it like normal.
+            if self.drain.tail == 0 {
+                (*self.drain.vec).extend(self.replace_with.by_ref());
+                return;
+            }
+
+            // First fill the range left by drain().
+            if !self.drain.fill(&mut self.replace_with) {
+                return;
+            }
+
+            // There may be more elements. Use the lower bound as an estimate.
+            let (lower_bound, _upper_bound) = self.replace_with.size_hint();
+            if lower_bound > 0 {
+                self.drain.move_tail(lower_bound);
+                if !self.drain.fill(&mut self.replace_with) {
+                    return;
+                }
+            }
+
+            // Collect any remaining elements.
+            // This is a zero-length vector which does not allocate if `lower_bound` was exact.
+            let mut collected = self
+                .replace_with
+                .by_ref()
+                .collect::<Vec<I::Item>>()
+                .into_iter();
+            // Now we have an exact count.
+            if collected.len() > 0 {
+                self.drain.move_tail(collected.len());
+                let filled = self.drain.fill(&mut collected);
+                debug_assert!(filled);
+                debug_assert_eq!(collected.len(), 0);
+            }
+        }
+        // Let `Drain::drop` move the tail back if necessary and restore `vec.len`.
+    }
+}
+
+/// Private helper methods for `Splice::drop`
+impl<T> Drain<'_, T> {
+    /// The range from `self.vec.len` to `self.tail_start` contains elements
+    /// that have been moved out.
+    /// Fill that range as much as possible with new elements from the `replace_with` iterator.
+    /// Returns `true` if we filled the entire range. (`replace_with.next()` didn’t return `None`.)
+    unsafe fn fill<I: Iterator<Item = T>>(&mut self, replace_with: &mut I) -> bool {
+        let vec = unsafe { &mut *self.vec };
+        let range_start = vec.len();
+        let range_end = self.end;
+        let range_slice = unsafe {
+            slice::from_raw_parts_mut(vec.data_raw().add(range_start), range_end - range_start)
+        };
+
+        for place in range_slice {
+            if let Some(new_item) = replace_with.next() {
+                unsafe { ptr::write(place, new_item) };
+                vec.set_len(vec.len() + 1);
+            } else {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Makes room for inserting more elements before the tail.
+    unsafe fn move_tail(&mut self, additional: usize) {
+        let vec = unsafe { &mut *self.vec };
+        let len = self.end + self.tail;
+        vec.reserve(len.checked_add(additional).expect("capacity overflow"));
+
+        let new_tail_start = self.end + additional;
+        unsafe {
+            let src = vec.data_raw().add(self.end);
+            let dst = vec.data_raw().add(new_tail_start);
+            ptr::copy(src, dst, self.tail);
+        }
+        self.end = new_tail_start;
+    }
+}
+
 /// Write is implemented for `ThinVec<u8>` by appending to the vector.
 /// The vector will grow as needed.
 /// This implementation is identical to the one for `Vec<u8>`.
@@ -2640,6 +2814,19 @@ mod tests {
             assert_eq!(v.drain(..).len(), 0);
 
             for _ in v.drain(..) {
+                unreachable!()
+            }
+
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 0);
+            assert_eq!(&v[..], &[]);
+        }
+
+        {
+            let mut v = ThinVec::<i32>::new();
+            assert_eq!(v.splice(.., []).len(), 0);
+
+            for _ in v.splice(.., []) {
                 unreachable!()
             }
 
@@ -3402,70 +3589,76 @@ mod std_tests {
         v.drain(5..=5);
     }
 
-    /* TODO: implement splice?
-        #[test]
-        fn test_splice() {
-            let mut v = thin_vec![1, 2, 3, 4, 5];
-            let a = [10, 11, 12];
-            v.splice(2..4, a.iter().cloned());
-            assert_eq!(v, &[1, 2, 10, 11, 12, 5]);
-            v.splice(1..3, Some(20));
-            assert_eq!(v, &[1, 20, 11, 12, 5]);
-        }
+    #[test]
+    fn test_splice() {
+        let mut v = thin_vec![1, 2, 3, 4, 5];
+        let a = [10, 11, 12];
+        v.splice(2..4, a.iter().cloned());
+        assert_eq!(v, &[1, 2, 10, 11, 12, 5]);
+        v.splice(1..3, Some(20));
+        assert_eq!(v, &[1, 20, 11, 12, 5]);
+    }
 
-        #[test]
-        fn test_splice_inclusive_range() {
-            let mut v = thin_vec![1, 2, 3, 4, 5];
-            let a = [10, 11, 12];
-            let t1: ThinVec<_> = v.splice(2..=3, a.iter().cloned()).collect();
-            assert_eq!(v, &[1, 2, 10, 11, 12, 5]);
-            assert_eq!(t1, &[3, 4]);
-            let t2: ThinVec<_> = v.splice(1..=2, Some(20)).collect();
-            assert_eq!(v, &[1, 20, 11, 12, 5]);
-            assert_eq!(t2, &[2, 10]);
-        }
+    #[test]
+    fn test_splice_inclusive_range() {
+        let mut v = thin_vec![1, 2, 3, 4, 5];
+        let a = [10, 11, 12];
+        let t1: ThinVec<_> = v.splice(2..=3, a.iter().cloned()).collect();
+        assert_eq!(v, &[1, 2, 10, 11, 12, 5]);
+        assert_eq!(t1, &[3, 4]);
+        let t2: ThinVec<_> = v.splice(1..=2, Some(20)).collect();
+        assert_eq!(v, &[1, 20, 11, 12, 5]);
+        assert_eq!(t2, &[2, 10]);
+    }
 
-        #[test]
-        #[should_panic]
-        fn test_splice_out_of_bounds() {
-            let mut v = thin_vec![1, 2, 3, 4, 5];
-            let a = [10, 11, 12];
-            v.splice(5..6, a.iter().cloned());
-        }
+    #[test]
+    #[should_panic]
+    fn test_splice_out_of_bounds() {
+        let mut v = thin_vec![1, 2, 3, 4, 5];
+        let a = [10, 11, 12];
+        v.splice(5..6, a.iter().cloned());
+    }
 
-        #[test]
-        #[should_panic]
-        fn test_splice_inclusive_out_of_bounds() {
-            let mut v = thin_vec![1, 2, 3, 4, 5];
-            let a = [10, 11, 12];
-            v.splice(5..=5, a.iter().cloned());
-        }
+    #[test]
+    #[should_panic]
+    fn test_splice_inclusive_out_of_bounds() {
+        let mut v = thin_vec![1, 2, 3, 4, 5];
+        let a = [10, 11, 12];
+        v.splice(5..=5, a.iter().cloned());
+    }
 
-        #[test]
-        fn test_splice_items_zero_sized() {
-            let mut vec = thin_vec![(), (), ()];
-            let vec2 = thin_vec![];
-            let t: ThinVec<_> = vec.splice(1..2, vec2.iter().cloned()).collect();
-            assert_eq!(vec, &[(), ()]);
-            assert_eq!(t, &[()]);
-        }
+    #[test]
+    fn test_splice_items_zero_sized() {
+        let mut vec = thin_vec![(), (), ()];
+        let vec2 = thin_vec![];
+        let t: ThinVec<_> = vec.splice(1..2, vec2.iter().cloned()).collect();
+        assert_eq!(vec, &[(), ()]);
+        assert_eq!(t, &[()]);
+    }
 
-        #[test]
-        fn test_splice_unbounded() {
-            let mut vec = thin_vec![1, 2, 3, 4, 5];
-            let t: ThinVec<_> = vec.splice(.., None).collect();
-            assert_eq!(vec, &[]);
-            assert_eq!(t, &[1, 2, 3, 4, 5]);
-        }
+    #[test]
+    fn test_splice_unbounded() {
+        let mut vec = thin_vec![1, 2, 3, 4, 5];
+        let t: ThinVec<_> = vec.splice(.., None).collect();
+        assert_eq!(vec, &[]);
+        assert_eq!(t, &[1, 2, 3, 4, 5]);
+    }
 
-        #[test]
-        fn test_splice_forget() {
-            let mut v = thin_vec![1, 2, 3, 4, 5];
-            let a = [10, 11, 12];
-            ::std::mem::forget(v.splice(2..4, a.iter().cloned()));
-            assert_eq!(v, &[1, 2]);
-        }
-    */
+    #[test]
+    fn test_splice_forget() {
+        let mut v = thin_vec![1, 2, 3, 4, 5];
+        let a = [10, 11, 12];
+        ::std::mem::forget(v.splice(2..4, a.iter().cloned()));
+        assert_eq!(v, &[1, 2]);
+    }
+
+    #[test]
+    fn test_splice_from_empty() {
+        let mut v = thin_vec![];
+        let a = [10, 11, 12];
+        v.splice(.., a.iter().cloned());
+        assert_eq!(v, &[10, 11, 12]);
+    }
 
     /* probs won't ever impl this
         #[test]
