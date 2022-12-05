@@ -1,32 +1,32 @@
 #![deny(missing_docs)]
 
-//! ThinVec is exactly the same as Vec, except that it stores its `len` and `capacity` in the buffer
+//! `ThinVec` is exactly the same as `Vec`, except that it stores its `len` and `capacity` in the buffer
 //! it allocates.
 //!
 //! This makes the memory footprint of ThinVecs lower; notably in cases where space is reserved for
 //! a non-existence `ThinVec<T>`. So `Vec<ThinVec<T>>` and `Option<ThinVec<T>>::None` will waste less
 //! space. Being pointer-sized also means it can be passed/stored in registers.
 //!
-//! Of course, any actually constructed ThinVec will theoretically have a bigger allocation, but
+//! Of course, any actually constructed `ThinVec` will theoretically have a bigger allocation, but
 //! the fuzzy nature of allocators means that might not actually be the case.
 //!
-//! Properties of Vec that are preserved:
+//! Properties of `Vec` that are preserved:
 //! * `ThinVec::new()` doesn't allocate (it points to a statically allocated singleton)
 //! * reallocation can be done in place
 //! * `size_of::<ThinVec<T>>()` == `size_of::<Option<ThinVec<T>>>()`
 //!
-//! Properties of Vec that aren't preserved:
+//! Properties of `Vec` that aren't preserved:
 //! * `ThinVec<T>` can't ever be zero-cost roundtripped to a `Box<[T]>`, `String`, or `*mut T`
 //! * `from_raw_parts` doesn't exist
-//! * ThinVec currently doesn't bother to not-allocate for Zero Sized Types (e.g. `ThinVec<()>`),
+//! * `ThinVec` currently doesn't bother to not-allocate for Zero Sized Types (e.g. `ThinVec<()>`),
 //!   but it could be done if someone cared enough to implement it.
 //!
 //!
 //!
 //! # Gecko FFI
 //!
-//! If you enable the gecko-ffi feature, ThinVec will verbatim bridge with the nsTArray type in
-//! Gecko (Firefox). That is, ThinVec and nsTArray have identical layouts *but not ABIs*,
+//! If you enable the gecko-ffi feature, `ThinVec` will verbatim bridge with the nsTArray type in
+//! Gecko (Firefox). That is, `ThinVec` and nsTArray have identical layouts *but not ABIs*,
 //! so nsTArrays/ThinVecs an be natively manipulated by C++ and Rust, and ownership can be
 //! transferred across the FFI boundary (**IF YOU ARE CAREFUL, SEE BELOW!!**).
 //!
@@ -107,17 +107,17 @@
 //! While relocations are generally predictable if you're very careful, **you should avoid using
 //! types with significant locations with Rust FFI**.
 //!
-//! Specifically, ThinVec will trivially relocate its contents whenever it needs to reallocate its
+//! Specifically, `ThinVec` will trivially relocate its contents whenever it needs to reallocate its
 //! buffer to change its capacity. This is the default reallocation strategy for nsTArray, and is
 //! suitable for the vast majority of types. Just be aware of this limitation!
 //!
 //! ## Auto Arrays Are Dangerous
 //!
-//! ThinVec has *some* support for handling auto arrays which store their buffer on the stack,
+//! `ThinVec` has *some* support for handling auto arrays which store their buffer on the stack,
 //! but this isn't well tested.
 //!
 //! Regardless of how much support we provide, Rust won't be aware of the buffer's limited lifetime,
-//! so standard auto array safety caveats apply about returning/storing them! ThinVec won't ever
+//! so standard auto array safety caveats apply about returning/storing them! `ThinVec` won't ever
 //! produce an auto array on its own, so this is only an issue for transferring an nsTArray into
 //! Rust.
 //!
@@ -135,7 +135,7 @@
 //! defined. Specifically, we must share the symbol for nsTArray's empty singleton. You will get
 //! linking errors if that isn't defined.
 //!
-//! The gecko-ffi feature also limits ThinVec to the legacy behaviors of nsTArray. Most notably,
+//! The gecko-ffi feature also limits `ThinVec` to the legacy behaviors of nsTArray. Most notably,
 //! nsTArray has a maximum capacity of i32::MAX (~2.1 billion items). Probably not an issue.
 //! Probably.
 //!
@@ -175,7 +175,7 @@ mod impl_details {
 mod impl_details {
     // Support for briding a gecko nsTArray verbatim into a ThinVec.
     //
-    // ThinVec can't see copy/move/delete implementations
+    // `ThinVec` can't see copy/move/delete implementations
     // from C++
     //
     // The actual layout of an nsTArray is:
@@ -190,7 +190,7 @@ mod impl_details {
     //
     // Rust doesn't natively support bit-fields, so we manually mask
     // and shift the bit. When the "auto" bit is set, the header and buffer
-    // are actually on the stack, meaning the ThinVec pointer-to-header
+    // are actually on the stack, meaning the `ThinVec` pointer-to-header
     // is essentially an "owned borrow", and therefore dangerous to handle.
     // There are no safety guards for this situation.
     //
@@ -198,7 +198,7 @@ mod impl_details {
     // our capacity u32. On big-endian platforms, it will be the low bit.
     // Hence we need some platform-specific CFGs for the necessary masking/shifting.
     //
-    // ThinVec won't ever construct an auto array. They only happen when
+    // `ThinVec` won't ever construct an auto array. They only happen when
     // bridging from C++. This means we don't need to ever set/preserve the bit.
     // We just need to be able to read and handle it if it happens to be there.
     //
@@ -333,6 +333,11 @@ extern "C" {
 
 // Utils for computing layouts of allocations
 
+/// Gets the size necessary to allocate a `ThinVec<T>` with the give capacity.
+///
+/// # Panics
+///
+/// This will panic if isize::MAX is overflowed at any point.
 fn alloc_size<T>(cap: usize) -> usize {
     // Compute "real" header size with pointer math
     //
@@ -353,6 +358,7 @@ fn alloc_size<T>(cap: usize) -> usize {
     final_size as usize
 }
 
+/// Gets the padding necessary for the array of a `ThinVec<T>`
 fn padding<T>() -> usize {
     let alloc_align = alloc_align::<T>();
     let header_size = mem::size_of::<Header>();
@@ -370,14 +376,25 @@ fn padding<T>() -> usize {
     }
 }
 
+/// Gets the align necessary to allocate a `ThinVec<T>`
 fn alloc_align<T>() -> usize {
     max(mem::align_of::<T>(), mem::align_of::<Header>())
 }
 
+/// Gets the layout necessary to allocate a `ThinVec<T>`
+///
+/// # Panics
+///
+/// Panics if the required size overflows `isize::MAX`.
 fn layout<T>(cap: usize) -> Layout {
     unsafe { Layout::from_size_align_unchecked(alloc_size::<T>(cap), alloc_align::<T>()) }
 }
 
+/// Allocates a header (and array) for a `ThinVec<T>` with the given capacity.
+///
+/// # Panics
+///
+/// Panics if the required size overflows `isize::MAX`.
 fn header_with_capacity<T>(cap: usize) -> NonNull<Header> {
     debug_assert!(cap > 0);
     unsafe {
@@ -467,7 +484,7 @@ impl<T> ThinVec<T> {
     /// If it is important to know the exact allocated capacity of a `ThinVec`,
     /// always use the [`capacity`] method after construction.
     ///
-    /// **NOTE**: unlike Vec, ThinVec **MUST** allocate to keep track of non-zero
+    /// **NOTE**: unlike `Vec`, `ThinVec` **MUST** allocate once to keep track of non-zero
     /// lengths. As such, we cannot provide the same guarantees about ThinVecs
     /// of ZSTs not allocating. However the allocation never needs to be resized
     /// to add more ZSTs, since the underlying array is still length 0.
@@ -1936,7 +1953,7 @@ impl<T> From<Box<[T]>> for ThinVec<T> {
     /// Convert a boxed slice into a vector by transferring ownership of
     /// the existing heap allocation.
     ///
-    /// **NOTE:** unlike std, this must reallocate to change the layout!
+    /// **NOTE:** unlike `std`, this must reallocate to change the layout!
     ///
     /// # Examples
     ///
@@ -1953,7 +1970,7 @@ impl<T> From<Box<[T]>> for ThinVec<T> {
 }
 
 impl<T> From<Vec<T>> for ThinVec<T> {
-    /// Convert a std::Vec into a ThinVec.
+    /// Convert a `std::Vec` into a `ThinVec`.
     ///
     /// **NOTE:** this must reallocate to change the layout!
     ///
@@ -1966,13 +1983,12 @@ impl<T> From<Vec<T>> for ThinVec<T> {
     /// assert_eq!(ThinVec::from(b), thin_vec![1, 2, 3]);
     /// ```
     fn from(s: Vec<T>) -> Self {
-        // Can just lean on the fact that `Box<[T]>` -> `Vec<T>` is Free.
         s.into_iter().collect()
     }
 }
 
 impl<T> From<ThinVec<T>> for Vec<T> {
-    /// Convert a ThinVec into a std::Vec.
+    /// Convert a `ThinVec` into a `std::Vec`.
     ///
     /// **NOTE:** this must reallocate to change the layout!
     ///
@@ -1985,7 +2001,6 @@ impl<T> From<ThinVec<T>> for Vec<T> {
     /// assert_eq!(Vec::from(b), vec![1, 2, 3]);
     /// ```
     fn from(s: ThinVec<T>) -> Self {
-        // Can just lean on the fact that `Box<[T]>` -> `Vec<T>` is Free.
         s.into_iter().collect()
     }
 }
@@ -1996,7 +2011,7 @@ impl<T> From<ThinVec<T>> for Box<[T]> {
     /// If `v` has excess capacity, its items will be moved into a
     /// newly-allocated buffer with exactly the right capacity.
     ///
-    /// **NOTE:** unlike std, this must reallocate to change the layout!
+    /// **NOTE:** unlike `std`, this must reallocate to change the layout!
     ///
     /// # Examples
     ///
@@ -2212,7 +2227,7 @@ impl<T> AsRef<[T]> for IntoIter<T> {
 impl<T: Clone> Clone for IntoIter<T> {
     #[allow(clippy::into_iter_on_ref)]
     fn clone(&self) -> Self {
-        // Just create a new ThinVec from the remaining elements and IntoIter it
+        // Just create a new `ThinVec` from the remaining elements and IntoIter it
         self.as_slice()
             .into_iter()
             .cloned()
@@ -2301,8 +2316,8 @@ pub struct Drain<'a, T> {
     /// It's ok to use IterMut here because it promises to only take mutable
     /// refs to the parts we haven't yielded yet.
     ///
-    /// A downside of this (and the *mut below is that it makes this Invariant, when
-    /// technically it could be covariant?)
+    /// A downside of this (and the *mut below) is that it makes this type invariant, when
+    /// technically it could be covariant?
     iter: IterMut<'a, T>,
     /// The actual ThinVec, which we need to hold onto to undo the leak amplification
     /// and backshift the tail into place. This should only be accessed when we're
@@ -2386,7 +2401,7 @@ impl<'a, T> Drain<'a, T> {
     #[must_use]
     pub fn as_slice(&self) -> &[T] {
         // SAFETY: this is A-OK because the elements that the underlying
-        // iterator still points at are still logically initialized and continguous.
+        // iterator still points at are still logically initialized and contiguous.
         self.iter.as_slice()
     }
 }
