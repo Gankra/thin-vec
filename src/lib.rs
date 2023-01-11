@@ -1533,7 +1533,7 @@ impl<T> ThinVec<T> {
     #[cfg(feature = "gecko-ffi")]
     #[inline]
     fn is_singleton(&self) -> bool {
-        self.ptr.as_ptr() as *const Header == &EMPTY_HEADER
+        unsafe { self.ptr.as_ptr() as *const Header == &EMPTY_HEADER }
     }
 
     #[cfg(not(feature = "gecko-ffi"))]
