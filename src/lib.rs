@@ -273,11 +273,13 @@ struct Header {
 }
 
 impl Header {
+    #[inline]
     #[allow(clippy::unnecessary_cast)]
     fn len(&self) -> usize {
         self._len as usize
     }
 
+    #[inline]
     fn set_len(&mut self, len: usize) {
         self._len = assert_size(len);
     }
