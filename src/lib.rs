@@ -147,6 +147,7 @@ use std::alloc::*;
 use std::borrow::*;
 use std::cmp::*;
 use std::convert::TryFrom;
+use std::convert::TryInto;
 use std::hash::*;
 use std::iter::FromIterator;
 use std::marker::PhantomData;
@@ -345,12 +346,18 @@ fn alloc_size<T>(cap: usize) -> usize {
     //
     // We turn everything into isizes here so that we can catch isize::MAX overflow,
     // we never want to allow allocations larger than that!
-    let cap = cap as isize;
     let header_size = mem::size_of::<Header>() as isize;
-    let elem_size = mem::size_of::<T>() as isize;
     let padding = padding::<T>() as isize;
 
-    let data_size = elem_size.checked_mul(cap).expect("capacity overflow");
+    let data_size = if mem::size_of::<T>() == 0 {
+        // If we're allocating an array for ZSTs we need a header/padding but no actual
+        // space for items, so we don't care about the capacity that was requested!
+        0
+    } else {
+        let cap: isize = cap.try_into().expect("capacity overflow");
+        let elem_size = mem::size_of::<T>() as isize;
+        elem_size.checked_mul(cap).expect("capacity overflow")
+    };
 
     let final_size = data_size
         .checked_add(header_size + padding)
@@ -4241,5 +4248,36 @@ mod std_tests {
         unsafe {
             vec.set_len(1);
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "capacity overflow")]
+    fn test_capacity_overflow_header_too_big() {
+        let vec: ThinVec<u8> = ThinVec::with_capacity(isize::MAX as usize - 2);
+        assert!(vec.capacity() > 0);
+    }
+    #[test]
+    #[should_panic(expected = "capacity overflow")]
+    fn test_capacity_overflow_cap_too_big() {
+        let vec: ThinVec<u8> = ThinVec::with_capacity(isize::MAX as usize + 1);
+        assert!(vec.capacity() > 0);
+    }
+    #[test]
+    #[should_panic(expected = "capacity overflow")]
+    fn test_capacity_overflow_size_mul1() {
+        let vec: ThinVec<u16> = ThinVec::with_capacity(isize::MAX as usize + 1);
+        assert!(vec.capacity() > 0);
+    }
+    #[test]
+    #[should_panic(expected = "capacity overflow")]
+    fn test_capacity_overflow_size_mul2() {
+        let vec: ThinVec<u16> = ThinVec::with_capacity(isize::MAX as usize / 2 + 1);
+        assert!(vec.capacity() > 0);
+    }
+    #[test]
+    #[should_panic(expected = "capacity overflow")]
+    fn test_capacity_overflow_cap_really_isnt_isize() {
+        let vec: ThinVec<u8> = ThinVec::with_capacity(isize::MAX as usize);
+        assert!(vec.capacity() > 0);
     }
 }
