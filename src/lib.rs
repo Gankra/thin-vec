@@ -1541,7 +1541,12 @@ impl<T> ThinVec<T> {
 
     #[cfg(feature = "gecko-ffi")]
     #[inline]
+    #[allow(unused_unsafe)]
     fn is_singleton(&self) -> bool {
+        // NOTE: the tests will complain that this "unsafe" isn't needed, but it *IS*!
+        // In production this refers to an *extern static* which *is* unsafe to reference.
+        // In tests this refers to a local static because we don't have Firefox's codebase
+        // providing the symbol!
         unsafe { self.ptr.as_ptr() as *const Header == &EMPTY_HEADER }
     }
 
