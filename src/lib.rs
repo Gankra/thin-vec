@@ -664,6 +664,11 @@ impl<T> ThinVec<T> {
         self.header().cap()
     }
 
+    /// Returns `true` if the vector has the capacity to hold any element.
+    pub fn has_capacity(&self) -> bool {
+        !self.is_singleton()
+    }
+
     /// Forces the length of the vector to `new_len`.
     ///
     /// This is a low-level operation that maintains none of the normal
