@@ -141,21 +141,26 @@
 //!
 //! [pinned]: https://doc.rust-lang.org/std/pin/index.html
 
+#![cfg_attr(not(feature = "std"), no_std)]
+
 #![allow(clippy::comparison_chain, clippy::missing_safety_doc)]
 
-use std::alloc::*;
-use std::borrow::*;
-use std::cmp::*;
-use std::convert::TryFrom;
-use std::convert::TryInto;
-use std::hash::*;
-use std::iter::FromIterator;
-use std::marker::PhantomData;
-use std::ops::Bound;
-use std::ops::{Deref, DerefMut, RangeBounds};
-use std::ptr::NonNull;
-use std::slice::IterMut;
-use std::{fmt, io, mem, ptr, slice};
+extern crate alloc;
+
+use alloc::{vec::Vec, boxed::Box};
+use alloc::alloc::*;
+use core::borrow::*;
+use core::cmp::*;
+use core::convert::TryFrom;
+use core::convert::TryInto;
+use core::hash::*;
+use core::iter::FromIterator;
+use core::marker::PhantomData;
+use core::ops::Bound;
+use core::ops::{Deref, DerefMut, RangeBounds};
+use core::ptr::NonNull;
+use core::slice::IterMut;
+use core::{fmt, mem, ptr, slice};
 
 use impl_details::*;
 
@@ -1117,7 +1122,7 @@ impl<T> ThinVec<T> {
             min_cap_bytes.next_power_of_two() as usize
         };
 
-        let cap = (bytes - std::mem::size_of::<Header>()) / elem_size;
+        let cap = (bytes - core::mem::size_of::<Header>()) / elem_size;
         unsafe {
             self.reallocate(cap);
         }
@@ -2006,7 +2011,7 @@ impl<T, const N: usize> From<[T; N]> for ThinVec<T> {
     /// assert_eq!(ThinVec::from([1, 2, 3]), thin_vec![1, 2, 3]);
     /// ```
     fn from(s: [T; N]) -> ThinVec<T> {
-        std::iter::IntoIterator::into_iter(s).collect()
+        core::iter::IntoIterator::into_iter(s).collect()
     }
 }
 
@@ -2248,11 +2253,11 @@ impl<T> DoubleEndedIterator for IntoIter<T> {
 
 impl<T> ExactSizeIterator for IntoIter<T> {}
 
-impl<T> std::iter::FusedIterator for IntoIter<T> {}
+impl<T> core::iter::FusedIterator for IntoIter<T> {}
 
 // SAFETY: the length calculation is trivial, we're an array! And if it's wrong we're So Screwed.
 #[cfg(feature = "unstable")]
-unsafe impl<T> std::iter::TrustedLen for IntoIter<T> {}
+unsafe impl<T> core::iter::TrustedLen for IntoIter<T> {}
 
 impl<T> Drop for IntoIter<T> {
     #[inline]
@@ -2414,9 +2419,9 @@ impl<'a, T> ExactSizeIterator for Drain<'a, T> {}
 
 // SAFETY: we need to keep track of this perfectly Or Else anyway!
 #[cfg(feature = "unstable")]
-unsafe impl<T> std::iter::TrustedLen for Drain<'_, T> {}
+unsafe impl<T> core::iter::TrustedLen for Drain<'_, T> {}
 
-impl<T> std::iter::FusedIterator for Drain<'_, T> {}
+impl<T> core::iter::FusedIterator for Drain<'_, T> {}
 
 impl<'a, T> Drop for Drain<'a, T> {
     fn drop(&mut self) {
@@ -2603,21 +2608,22 @@ impl<T> Drain<'_, T> {
 /// Write is implemented for `ThinVec<u8>` by appending to the vector.
 /// The vector will grow as needed.
 /// This implementation is identical to the one for `Vec<u8>`.
-impl io::Write for ThinVec<u8> {
+#[cfg(feature = "std")]
+impl std::io::Write for ThinVec<u8> {
     #[inline]
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         self.extend_from_slice(buf);
         Ok(buf.len())
     }
 
     #[inline]
-    fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
+    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
         self.extend_from_slice(buf);
         Ok(())
     }
 
     #[inline]
-    fn flush(&mut self) -> io::Result<()> {
+    fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
 }
