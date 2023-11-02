@@ -749,7 +749,7 @@ impl<T> ThinVec<T> {
         if self.is_singleton() {
             // A prerequisite of `Vec::set_len` is that `new_len` must be
             // less than or equal to capacity(). The same applies here.
-            assert!(len == 0, "invalid set_len({}) on empty ThinVec", len);
+            debug_assert!(len == 0, "invalid set_len({}) on empty ThinVec", len);
         } else {
             self.header_mut().set_len(len)
         }
