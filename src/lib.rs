@@ -310,11 +310,13 @@ impl Header {
 
 #[cfg(not(feature = "gecko-ffi"))]
 impl Header {
+    #[inline]
     #[allow(clippy::unnecessary_cast)]
     fn cap(&self) -> usize {
         self._cap as usize
     }
 
+    #[inline]
     fn set_cap(&mut self, cap: usize) {
         self._cap = assert_size(cap);
     }
