@@ -142,13 +142,12 @@
 //! [pinned]: https://doc.rust-lang.org/std/pin/index.html
 
 #![cfg_attr(not(feature = "std"), no_std)]
-
 #![allow(clippy::comparison_chain, clippy::missing_safety_doc)]
 
 extern crate alloc;
 
-use alloc::{vec::Vec, boxed::Box};
 use alloc::alloc::*;
+use alloc::{boxed::Box, vec::Vec};
 use core::borrow::*;
 use core::cmp::*;
 use core::convert::TryFrom;
@@ -1971,7 +1970,7 @@ impl<T> FromIterator<T> for ThinVec<T> {
     #[inline]
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> ThinVec<T> {
         let mut vec = ThinVec::new();
-        vec.extend(iter.into_iter());
+        vec.extend(iter);
         vec
     }
 }
@@ -2640,10 +2639,11 @@ impl std::io::Write for ThinVec<u8> {
 #[cfg(test)]
 mod tests {
     use super::{ThinVec, MAX_CAP};
+    use crate::alloc::{string::ToString, vec};
 
     #[test]
     fn test_size_of() {
-        use std::mem::size_of;
+        use core::mem::size_of;
         assert_eq!(size_of::<ThinVec<u8>>(), size_of::<&u8>());
 
         assert_eq!(size_of::<Option<ThinVec<u8>>>(), size_of::<&u8>());
@@ -2831,6 +2831,7 @@ mod tests {
             assert_eq!(v.into_iter().count(), 0);
 
             let v = ThinVec::<i32>::new();
+            #[allow(clippy::never_loop)]
             for _ in v.into_iter() {
                 unreachable!();
             }
@@ -2840,6 +2841,7 @@ mod tests {
             let mut v = ThinVec::<i32>::new();
             assert_eq!(v.drain(..).len(), 0);
 
+            #[allow(clippy::never_loop)]
             for _ in v.drain(..) {
                 unreachable!()
             }
@@ -2853,6 +2855,7 @@ mod tests {
             let mut v = ThinVec::<i32>::new();
             assert_eq!(v.splice(.., []).len(), 0);
 
+            #[allow(clippy::never_loop)]
             for _ in v.splice(.., []) {
                 unreachable!()
             }
@@ -3016,8 +3019,12 @@ mod std_tests {
     #![allow(clippy::reversed_empty_ranges)]
 
     use super::*;
-    use std::mem::size_of;
-    use std::usize;
+    use crate::alloc::{
+        format,
+        string::{String, ToString},
+    };
+    use core::mem::size_of;
+    use core::usize;
 
     struct DropCounter<'a> {
         count: &'a mut u32,
@@ -3675,7 +3682,7 @@ mod std_tests {
     fn test_splice_forget() {
         let mut v = thin_vec![1, 2, 3, 4, 5];
         let a = [10, 11, 12];
-        ::std::mem::forget(v.splice(2..4, a.iter().cloned()));
+        ::core::mem::forget(v.splice(2..4, a.iter().cloned()));
         assert_eq!(v, &[1, 2]);
     }
 
@@ -4194,7 +4201,7 @@ mod std_tests {
                 let v: ThinVec<$typename> = ThinVec::with_capacity(1 /* ensure allocation */);
                 let head_ptr: *mut $typename = v.data_raw();
                 assert_eq!(
-                    head_ptr as usize % std::mem::align_of::<$typename>(),
+                    head_ptr as usize % core::mem::align_of::<$typename>(),
                     0,
                     "expected Header::data<{}> to be aligned",
                     stringify!($typename)
@@ -4202,8 +4209,8 @@ mod std_tests {
             }};
         }
 
-        const HEADER_SIZE: usize = std::mem::size_of::<Header>();
-        assert_eq!(2 * std::mem::size_of::<usize>(), HEADER_SIZE);
+        const HEADER_SIZE: usize = core::mem::size_of::<Header>();
+        assert_eq!(2 * core::mem::size_of::<usize>(), HEADER_SIZE);
 
         #[repr(C, align(128))]
         struct Funky<T>(T);
