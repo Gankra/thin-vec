@@ -11,7 +11,8 @@ readme = "README.md"
 
 [features]
 unstable = []
-default = []
+default = ["std"]
+std = []
 
 # Gecko specific features. These features cause thin-vec to have the same layout
 # and behaviour as nsTArray, allowing it to be used in C++ FFI. Requires

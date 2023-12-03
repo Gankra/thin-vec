@@ -24,7 +24,7 @@ jobs:
         run: MIRIFLAGS=-Zmiri-strict-provenance cargo miri test
       - name: Test (gecko-ffi) with Miri
         run: MIRIFLAGS=-Zmiri-strict-provenance cargo miri test --features=gecko-ffi
-      
+
   build:
     runs-on: ubuntu-latest
     steps:
@@ -39,7 +39,9 @@ jobs:
       run: cargo test --features=serde --verbose
     - name: Run tests (gecko-ffi)
       run: cargo test --tests --features=gecko-ffi --verbose
-  
+    - name: Run tests (no_std)
+      run: cargo test --tests --no-default-features --verbose
+
   fmt:
     runs-on: ubuntu-latest
     steps:
@@ -54,8 +56,8 @@ jobs:
         with:
           command: fmt
           args: --all -- --check
-          
-          
+
+
   clippy:
     runs-on: ubuntu-latest
     steps:
@@ -72,8 +74,8 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           args: --workspace --tests --examples
-          
-          
+
+
   docs:
     runs-on: ubuntu-latest
     env:
