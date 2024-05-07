@@ -2657,13 +2657,13 @@ mod tests {
     #[test]
     fn test_data_ptr_alignment() {
         let v = ThinVec::<u16>::new();
-        assert!(v.data_raw() as usize % 2 == 0);
+        assert!(v.data_raw() as usize % core::mem::align_of::<u16>() == 0);
 
         let v = ThinVec::<u32>::new();
-        assert!(v.data_raw() as usize % 4 == 0);
+        assert!(v.data_raw() as usize % core::mem::align_of::<u32>() == 0);
 
         let v = ThinVec::<u64>::new();
-        assert!(v.data_raw() as usize % 8 == 0);
+        assert!(v.data_raw() as usize % core::mem::align_of::<u64>() == 0);
     }
 
     #[test]
