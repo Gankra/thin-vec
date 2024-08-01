@@ -1991,7 +1991,6 @@ impl<T: Clone> From<&[T]> for ThinVec<T> {
     }
 }
 
-#[cfg(not(no_global_oom_handling))]
 impl<T: Clone> From<&mut [T]> for ThinVec<T> {
     /// Allocate a `ThinVec<T>` and fill it by cloning `s`'s items.
     ///
