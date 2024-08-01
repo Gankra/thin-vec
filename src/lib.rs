@@ -158,7 +158,7 @@ use core::marker::PhantomData;
 use core::ops::Bound;
 use core::ops::{Deref, DerefMut, RangeBounds};
 use core::ptr::NonNull;
-use core::slice::IterMut;
+use core::slice::Iter;
 use core::{fmt, mem, ptr, slice};
 
 use impl_details::*;
@@ -1446,12 +1446,11 @@ impl<T> ThinVec<T> {
             // Set our length to the start bound
             self.set_len(start); // could be the singleton
 
-            let iter =
-                slice::from_raw_parts_mut(self.data_raw().add(start), end - start).iter_mut();
+            let iter = slice::from_raw_parts(self.data_raw().add(start), end - start).iter();
 
             Drain {
                 iter,
-                vec: self,
+                vec: NonNull::from(self),
                 end,
                 tail: len - end,
             }
@@ -2384,20 +2383,17 @@ pub struct Drain<'a, T> {
     // and setting `len` to `len + tail_len` to undo the leak amplification.
     /// An iterator over the elements we're removing.
     ///
-    /// As we go we'll be `read`ing out of the mutable refs yielded by this.
-    /// It's ok to use IterMut here because it promises to only take mutable
-    /// refs to the parts we haven't yielded yet.
-    ///
-    /// A downside of this (and the *mut below) is that it makes this type invariant, when
-    /// technically it could be covariant?
-    iter: IterMut<'a, T>,
+    /// As we go we'll be `read`ing out of the shared refs yielded by this.
+    /// It's ok to use Iter here because it promises to only take refs to the parts
+    /// we haven't yielded yet.
+    iter: Iter<'a, T>,
     /// The actual ThinVec, which we need to hold onto to undo the leak amplification
     /// and backshift the tail into place. This should only be accessed when we're
-    /// completely done with the IterMut in the `drop` impl of this type (or miri will get mad).
+    /// completely done with the Iter in the `drop` impl of this type (or miri will get mad).
     ///
-    /// Since we set the `len` of this to be before `IterMut`, we can use that `len`
+    /// Since we set the `len` of this to be before `Iter`, we can use that `len`
     /// to retrieve the index of the start of the drain range later.
-    vec: *mut ThinVec<T>,
+    vec: NonNull<ThinVec<T>>,
     /// The one-past-the-end index of the drain range, or equivalently the start of the tail.
     end: usize,
     /// The length of the tail.
@@ -2436,7 +2432,7 @@ impl<'a, T> Drop for Drain<'a, T> {
 
         // Move the tail over the drained items, and update the length.
         unsafe {
-            let vec = &mut *self.vec;
+            let vec = self.vec.as_mut();
 
             // Don't mutate the empty singleton!
             if !vec.is_singleton() {
@@ -2533,7 +2529,7 @@ impl<I: Iterator> Drop for Splice<'_, I> {
             // If there's no tail elements, then the inner ThinVec is already
             // correct and we can just extend it like normal.
             if self.drain.tail == 0 {
-                (*self.drain.vec).extend(self.replace_with.by_ref());
+                self.drain.vec.as_mut().extend(self.replace_with.by_ref());
                 return;
             }
 
@@ -2577,7 +2573,7 @@ impl<T> Drain<'_, T> {
     /// Fill that range as much as possible with new elements from the `replace_with` iterator.
     /// Returns `true` if we filled the entire range. (`replace_with.next()` didn’t return `None`.)
     unsafe fn fill<I: Iterator<Item = T>>(&mut self, replace_with: &mut I) -> bool {
-        let vec = unsafe { &mut *self.vec };
+        let vec = unsafe { self.vec.as_mut() };
         let range_start = vec.len();
         let range_end = self.end;
         let range_slice = unsafe {
@@ -2597,7 +2593,7 @@ impl<T> Drain<'_, T> {
 
     /// Makes room for inserting more elements before the tail.
     unsafe fn move_tail(&mut self, additional: usize) {
-        let vec = unsafe { &mut *self.vec };
+        let vec = unsafe { self.vec.as_mut() };
         let len = self.end + self.tail;
         vec.reserve(len.checked_add(additional).expect("capacity overflow"));
 
@@ -3774,17 +3770,15 @@ mod std_tests {
         assert_eq!(it.next(), None);
     }
 
-    /* TODO: make drain covariant
-        #[allow(dead_code)]
-        fn assert_covariance() {
-            fn drain<'new>(d: Drain<'static, &'static str>) -> Drain<'new, &'new str> {
-                d
-            }
-            fn into_iter<'new>(i: IntoIter<&'static str>) -> IntoIter<&'new str> {
-                i
-            }
+    #[allow(dead_code)]
+    fn assert_covariance() {
+        fn drain<'new>(d: Drain<'static, &'static str>) -> Drain<'new, &'new str> {
+            d
         }
-    */
+        fn into_iter<'new>(i: IntoIter<&'static str>) -> IntoIter<&'new str> {
+            i
+        }
+    }
 
     /* TODO: specialize vec.into_iter().collect::<ThinVec<_>>();
         #[test]
