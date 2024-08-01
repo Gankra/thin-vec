@@ -142,6 +142,7 @@
 //! [pinned]: https://doc.rust-lang.org/std/pin/index.html
 
 #![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(feature = "unstable", feature(trusted_len))]
 #![allow(clippy::comparison_chain, clippy::missing_safety_doc)]
 
 extern crate alloc;
