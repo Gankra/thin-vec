@@ -420,13 +420,18 @@ fn header_with_capacity<T>(cap: usize) -> NonNull<Header> {
             handle_alloc_error(layout)
         }
 
-        // "Infinite" capacity for zero-sized types:
-        (*header).set_cap(if mem::size_of::<T>() == 0 {
-            MAX_CAP
-        } else {
-            cap
-        });
-        (*header).set_len(0);
+        ptr::write(
+            header,
+            Header {
+                _len: 0,
+                _cap: if mem::size_of::<T>() == 0 {
+                    // "Infinite" capacity for zero-sized types:
+                    MAX_CAP
+                } else {
+                    cap
+                },
+            },
+        );
 
         NonNull::new_unchecked(header)
     }
