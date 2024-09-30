@@ -255,6 +255,33 @@ mod impl_details {
     }
 }
 
+#[cold]
+fn capacity_overflow() -> ! {
+    panic!("capacity overflow")
+}
+
+trait UnwrapCapOverflow<T> {
+    fn unwrap_cap_overflow(self) -> T;
+}
+
+impl<T> UnwrapCapOverflow<T> for Option<T> {
+    fn unwrap_cap_overflow(self) -> T {
+        match self {
+            Some(val) => val,
+            None => capacity_overflow(),
+        }
+    }
+}
+
+impl<T, E> UnwrapCapOverflow<T> for Result<T, E> {
+    fn unwrap_cap_overflow(self) -> T {
+        match self {
+            Ok(val) => val,
+            Err(_) => capacity_overflow(),
+        }
+    }
+}
+
 // The header of a ThinVec.
 //
 // The _cap can be a bitfield, so use accessors to avoid trouble.
@@ -360,14 +387,14 @@ fn alloc_size<T>(cap: usize) -> usize {
         // space for items, so we don't care about the capacity that was requested!
         0
     } else {
-        let cap: isize = cap.try_into().expect("capacity overflow");
+        let cap: isize = cap.try_into().unwrap_cap_overflow();
         let elem_size = mem::size_of::<T>() as isize;
-        elem_size.checked_mul(cap).expect("capacity overflow")
+        elem_size.checked_mul(cap).unwrap_cap_overflow()
     };
 
     let final_size = data_size
         .checked_add(header_size + padding)
-        .expect("capacity overflow");
+        .unwrap_cap_overflow();
 
     // Ok now we can turn it back into a usize (don't need to worry about negatives)
     final_size as usize
@@ -1055,7 +1082,7 @@ impl<T> ThinVec<T> {
     pub fn reserve(&mut self, additional: usize) {
         let len = self.len();
         let old_cap = self.capacity();
-        let min_cap = len.checked_add(additional).expect("capacity overflow");
+        let min_cap = len.checked_add(additional).unwrap_cap_overflow();
         if min_cap <= old_cap {
             return;
         }
@@ -1086,7 +1113,7 @@ impl<T> ThinVec<T> {
 
         let len = self.len();
         let old_cap = self.capacity();
-        let min_cap = len.checked_add(additional).expect("capacity overflow");
+        let min_cap = len.checked_add(additional).unwrap_cap_overflow();
         if min_cap <= old_cap {
             return;
         }
@@ -1140,10 +1167,7 @@ impl<T> ThinVec<T> {
     ///
     /// Re-allocates only if `self.capacity() < self.len() + additional`.
     pub fn reserve_exact(&mut self, additional: usize) {
-        let new_cap = self
-            .len()
-            .checked_add(additional)
-            .expect("capacity overflow");
+        let new_cap = self.len().checked_add(additional).unwrap_cap_overflow();
         let old_cap = self.capacity();
         if new_cap > old_cap {
             unsafe {
@@ -2599,7 +2623,7 @@ impl<T> Drain<'_, T> {
     unsafe fn move_tail(&mut self, additional: usize) {
         let vec = unsafe { &mut *self.vec };
         let len = self.end + self.tail;
-        vec.reserve(len.checked_add(additional).expect("capacity overflow"));
+        vec.reserve(len.checked_add(additional).unwrap_cap_overflow());
 
         let new_tail_start = self.end + additional;
         unsafe {
