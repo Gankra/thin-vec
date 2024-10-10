@@ -1,4 +1,6 @@
-#![deny(missing_docs)]
+#![deny(missing_docs, rust_2018_idioms)]
+#![warn(clippy::pedantic, clippy::use_self)]
+#![allow(clippy::doc_markdown, clippy::many_single_char_names)]
 
 //! `ThinVec` is exactly the same as `Vec`, except that it stores its `len` and `capacity` in the buffer
 //! it allocates.
@@ -146,13 +148,13 @@
 
 extern crate alloc;
 
-use alloc::alloc::*;
+use alloc::alloc::{alloc, dealloc, handle_alloc_error, realloc, Layout};
 use alloc::{boxed::Box, vec::Vec};
-use core::borrow::*;
-use core::cmp::*;
+use core::borrow::{Borrow, BorrowMut};
+use core::cmp::{max, Eq, Ord, Ordering, PartialEq, PartialOrd};
 use core::convert::TryFrom;
 use core::convert::TryInto;
-use core::hash::*;
+use core::hash::{Hash, Hasher};
 use core::iter::FromIterator;
 use core::marker::PhantomData;
 use core::ops::Bound;
@@ -161,7 +163,7 @@ use core::ptr::NonNull;
 use core::slice::IterMut;
 use core::{fmt, mem, ptr, slice};
 
-use impl_details::*;
+use impl_details::{assert_size, SizeType, MAX_CAP};
 
 // modules: a simple way to cfg a whole bunch of impl details at once
 
@@ -170,7 +172,6 @@ mod impl_details {
     pub type SizeType = usize;
     pub const MAX_CAP: usize = !0;
 
-    #[inline(always)]
     pub fn assert_size(x: usize) -> SizeType {
         x
     }
@@ -211,7 +212,7 @@ mod impl_details {
 
     pub type SizeType = u32;
 
-    pub const MAX_CAP: usize = i32::max_value() as usize;
+    pub const MAX_CAP: usize = i32::MAX as usize;
 
     // Little endian: the auto bit is the high bit, and the capacity is
     // verbatim. So we just need to mask off the high bit. Note that
@@ -273,20 +274,20 @@ mod impl_details {
 #[cfg_attr(all(feature = "gecko-ffi", any(test, miri)), repr(align(8)))]
 #[repr(C)]
 struct Header {
-    _len: SizeType,
-    _cap: SizeType,
+    len: SizeType,
+    cap: SizeType,
 }
 
 impl Header {
     #[inline]
     #[allow(clippy::unnecessary_cast)]
     fn len(&self) -> usize {
-        self._len as usize
+        self.len as usize
     }
 
     #[inline]
     fn set_len(&mut self, len: usize) {
-        self._len = assert_size(len);
+        self.len = assert_size(len);
     }
 }
 
@@ -317,12 +318,12 @@ impl Header {
     #[inline]
     #[allow(clippy::unnecessary_cast)]
     fn cap(&self) -> usize {
-        self._cap as usize
+        self.cap as usize
     }
 
     #[inline]
     fn set_cap(&mut self, cap: usize) {
-        self._cap = assert_size(cap);
+        self.cap = assert_size(cap);
     }
 }
 
@@ -332,7 +333,7 @@ impl Header {
 /// on size == 0 in every method), but it's a bunch of work for something that
 /// doesn't matter much.
 #[cfg(any(not(feature = "gecko-ffi"), test, miri))]
-static EMPTY_HEADER: Header = Header { _len: 0, _cap: 0 };
+static EMPTY_HEADER: Header = Header { len: 0, cap: 0 };
 
 #[cfg(all(feature = "gecko-ffi", not(test), not(miri)))]
 extern "C" {
@@ -341,6 +342,11 @@ extern "C" {
 }
 
 // Utils for computing layouts of allocations
+
+fn size_of_as_isize<T>() -> isize {
+    isize::try_from(mem::size_of::<T>())
+        .expect("cast should never fail as allocation size always fits in isize")
+}
 
 /// Gets the size necessary to allocate a `ThinVec<T>` with the give capacity.
 ///
@@ -352,8 +358,9 @@ fn alloc_size<T>(cap: usize) -> usize {
     //
     // We turn everything into isizes here so that we can catch isize::MAX overflow,
     // we never want to allow allocations larger than that!
-    let header_size = mem::size_of::<Header>() as isize;
-    let padding = padding::<T>() as isize;
+    let header_size = size_of_as_isize::<Header>();
+    let padding = isize::try_from(padding::<T>())
+        .expect("cast should never fail as alignment always fits in isize ");
 
     let data_size = if mem::size_of::<T>() == 0 {
         // If we're allocating an array for ZSTs we need a header/padding but no actual
@@ -361,7 +368,7 @@ fn alloc_size<T>(cap: usize) -> usize {
         0
     } else {
         let cap: isize = cap.try_into().expect("capacity overflow");
-        let elem_size = mem::size_of::<T>() as isize;
+        let elem_size = size_of_as_isize::<T>();
         elem_size.checked_mul(cap).expect("capacity overflow")
     };
 
@@ -370,7 +377,9 @@ fn alloc_size<T>(cap: usize) -> usize {
         .expect("capacity overflow");
 
     // Ok now we can turn it back into a usize (don't need to worry about negatives)
-    final_size as usize
+    final_size
+        .try_into()
+        .expect("cannot allocate object larger than isize")
 }
 
 /// Gets the padding necessary for the array of a `ThinVec<T>`
@@ -379,12 +388,8 @@ fn padding<T>() -> usize {
     let header_size = mem::size_of::<Header>();
 
     if alloc_align > header_size {
-        if cfg!(feature = "gecko-ffi") {
-            panic!(
-                "nsTArray does not handle alignment above > {} correctly",
-                header_size
-            );
-        }
+        #[cfg(feature = "gecko-ffi")]
+        panic!("nsTArray does not handle alignment above > {header_size} correctly");
         alloc_align - header_size
     } else {
         0
@@ -414,7 +419,9 @@ fn header_with_capacity<T>(cap: usize) -> NonNull<Header> {
     debug_assert!(cap > 0);
     unsafe {
         let layout = layout::<T>(cap);
-        let header = alloc(layout) as *mut Header;
+
+        #[allow(clippy::cast_ptr_alignment)] // We have just allocated with the correct alignment.
+        let header = alloc(layout).cast::<Header>();
 
         if header.is_null() {
             handle_alloc_error(layout)
@@ -483,8 +490,9 @@ impl<T> ThinVec<T> {
     /// Creates a new empty ThinVec.
     ///
     /// This will not allocate.
-    pub fn new() -> ThinVec<T> {
-        ThinVec::with_capacity(0)
+    #[must_use]
+    pub fn new() -> Self {
+        Self::with_capacity(0)
     }
 
     /// Constructs a new, empty `ThinVec<T>` with at least the specified capacity.
@@ -541,7 +549,8 @@ impl<T> ThinVec<T> {
     /// // Only true **without** the gecko-ffi feature!
     /// // assert_eq!(vec_units.capacity(), usize::MAX);
     /// ```
-    pub fn with_capacity(cap: usize) -> ThinVec<T> {
+    #[must_use]
+    pub fn with_capacity(cap: usize) -> Self {
         // `padding` contains ~static assertions against types that are
         // incompatible with the current feature flags. We also call it to
         // invoke these assertions when getting a pointer to the `ThinVec`
@@ -553,13 +562,13 @@ impl<T> ThinVec<T> {
 
         if cap == 0 {
             unsafe {
-                ThinVec {
-                    ptr: NonNull::new_unchecked(&EMPTY_HEADER as *const Header as *mut Header),
+                Self {
+                    ptr: NonNull::new_unchecked(std::ptr::addr_of!(EMPTY_HEADER) as *mut _),
                     boo: PhantomData,
                 }
             }
         } else {
-            ThinVec {
+            Self {
                 ptr: header_with_capacity::<T>(cap),
                 boo: PhantomData,
             }
@@ -612,8 +621,8 @@ impl<T> ThinVec<T> {
                 // This could technically result in overflow, but padding
                 // would have to be absurdly large for this to occur.
                 let header_size = mem::size_of::<Header>();
-                let ptr = self.ptr.as_ptr() as *mut u8;
-                ptr.add(header_size + padding) as *mut T
+                let ptr = self.ptr.as_ptr().cast::<u8>();
+                ptr.add(header_size + padding).cast::<T>()
             }
         }
     }
@@ -634,6 +643,7 @@ impl<T> ThinVec<T> {
     /// let a = thin_vec![1, 2, 3];
     /// assert_eq!(a.len(), 3);
     /// ```
+    #[must_use]
     pub fn len(&self) -> usize {
         self.header().len()
     }
@@ -651,6 +661,7 @@ impl<T> ThinVec<T> {
     /// v.push(1);
     /// assert!(!v.is_empty());
     /// ```
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -666,11 +677,13 @@ impl<T> ThinVec<T> {
     /// let vec: ThinVec<i32> = ThinVec::with_capacity(10);
     /// assert_eq!(vec.capacity(), 10);
     /// ```
+    #[must_use]
     pub fn capacity(&self) -> usize {
         self.header().cap()
     }
 
     /// Returns `true` if the vector has the capacity to hold any element.
+    #[must_use]
     pub fn has_capacity(&self) -> bool {
         !self.is_singleton()
     }
@@ -760,15 +773,15 @@ impl<T> ThinVec<T> {
         if self.is_singleton() {
             // A prerequisite of `Vec::set_len` is that `new_len` must be
             // less than or equal to capacity(). The same applies here.
-            debug_assert!(len == 0, "invalid set_len({}) on empty ThinVec", len);
+            debug_assert!(len == 0, "invalid set_len({len}) on empty ThinVec");
         } else {
-            self.header_mut().set_len(len)
+            self.header_mut().set_len(len);
         }
     }
 
     // For internal use only, when setting the length and it's known to be the non-singleton.
     unsafe fn set_len_non_singleton(&mut self, len: usize) {
-        self.header_mut().set_len(len)
+        self.header_mut().set_len(len);
     }
 
     /// Appends an element to the back of a collection.
@@ -1024,6 +1037,7 @@ impl<T> ThinVec<T> {
     /// let buffer = thin_vec![1, 2, 3, 5, 8];
     /// io::sink().write(buffer.as_slice()).unwrap();
     /// ```
+    #[must_use]
     pub fn as_slice(&self) -> &[T] {
         unsafe { slice::from_raw_parts(self.data_raw(), self.len()) }
     }
@@ -1040,6 +1054,7 @@ impl<T> ThinVec<T> {
     /// let mut buffer = vec![0; 3];
     /// io::repeat(0b101).read_exact(buffer.as_mut_slice()).unwrap();
     /// ```
+    #[must_use]
     pub fn as_mut_slice(&mut self) -> &mut [T] {
         unsafe { slice::from_raw_parts_mut(self.data_raw(), self.len()) }
     }
@@ -1048,9 +1063,11 @@ impl<T> ThinVec<T> {
     ///
     /// May reserve more space than requested, to avoid frequent reallocations.
     ///
-    /// Panics if the new capacity overflows `usize`.
-    ///
     /// Re-allocates only if `self.capacity() < self.len() + additional`.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if the new capacity overflows `usize`.
     #[cfg(not(feature = "gecko-ffi"))]
     pub fn reserve(&mut self, additional: usize) {
         let len = self.len();
@@ -1136,9 +1153,11 @@ impl<T> ThinVec<T> {
 
     /// Reserves the minimum capacity for `additional` more elements to be inserted.
     ///
-    /// Panics if the new capacity overflows `usize`.
-    ///
     /// Re-allocates only if `self.capacity() < self.len() + additional`.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the new capacity overflows `usize`.
     pub fn reserve_exact(&mut self, additional: usize) {
         let new_cap = self
             .len()
@@ -1173,7 +1192,7 @@ impl<T> ThinVec<T> {
         let new_cap = self.len();
         if new_cap < old_cap {
             if new_cap == 0 {
-                *self = ThinVec::new();
+                *self = Self::new();
             } else {
                 unsafe {
                     self.reallocate(new_cap);
@@ -1273,7 +1292,7 @@ impl<T> ThinVec<T> {
         F: FnMut(&mut T) -> K,
         K: PartialEq<K>,
     {
-        self.dedup_by(|a, b| key(a) == key(b))
+        self.dedup_by(|a, b| key(a) == key(b));
     }
 
     /// Removes consecutive elements in the vector according to a predicate.
@@ -1352,14 +1371,15 @@ impl<T> ThinVec<T> {
     /// assert_eq!(vec, [1]);
     /// assert_eq!(vec2, [2, 3]);
     /// ```
-    pub fn split_off(&mut self, at: usize) -> ThinVec<T> {
+    #[allow(clippy::return_self_not_must_use)] // Mutates self
+    pub fn split_off(&mut self, at: usize) -> Self {
         let old_len = self.len();
         let new_vec_len = old_len - at;
 
         assert!(at <= old_len, "Index out of bounds");
 
         unsafe {
-            let mut new_vec = ThinVec::with_capacity(new_vec_len);
+            let mut new_vec = Self::with_capacity(new_vec_len);
 
             ptr::copy_nonoverlapping(self.data_raw().add(at), new_vec.data_raw(), new_vec_len);
 
@@ -1387,8 +1407,8 @@ impl<T> ThinVec<T> {
     /// assert_eq!(vec, [1, 2, 3, 4, 5, 6]);
     /// assert_eq!(vec2, []);
     /// ```
-    pub fn append(&mut self, other: &mut ThinVec<T>) {
-        self.extend(other.drain(..))
+    pub fn append(&mut self, other: &mut Self) {
+        self.extend(other.drain(..));
     }
 
     /// Removes the specified range from the vector in bulk, returning all
@@ -1511,11 +1531,11 @@ impl<T> ThinVec<T> {
         debug_assert!(new_cap > 0);
         if self.has_allocation() {
             let old_cap = self.capacity();
-            let ptr = realloc(
-                self.ptr() as *mut u8,
-                layout::<T>(old_cap),
-                alloc_size::<T>(new_cap),
-            ) as *mut Header;
+            let old_ptr = self.ptr().cast::<u8>();
+
+            #[allow(clippy::cast_ptr_alignment)] // We just allocated with the correct alignment
+            let ptr =
+                realloc(old_ptr, layout::<T>(old_cap), alloc_size::<T>(new_cap)).cast::<Header>();
 
             if ptr.is_null() {
                 handle_alloc_error(layout::<T>(new_cap))
@@ -1643,7 +1663,7 @@ impl<T: Clone> ThinVec<T> {
     ///
     /// [`extend`]: ThinVec::extend
     pub fn extend_from_slice(&mut self, other: &[T]) {
-        self.extend(other.iter().cloned())
+        self.extend(other.iter().cloned());
     }
 }
 
@@ -1667,7 +1687,7 @@ impl<T: PartialEq> ThinVec<T> {
     /// # }
     /// ```
     pub fn dedup(&mut self) {
-        self.dedup_by(|a, b| a == b)
+        self.dedup_by(|a, b| a == b);
     }
 }
 
@@ -1685,7 +1705,7 @@ impl<T> Drop for ThinVec<T> {
                     return;
                 }
 
-                dealloc(this.ptr() as *mut u8, layout::<T>(this.capacity()))
+                dealloc(this.ptr().cast::<u8>(), layout::<T>(this.capacity()));
             }
         }
 
@@ -1767,7 +1787,7 @@ where
     T: PartialOrd,
 {
     #[inline]
-    fn partial_cmp(&self, other: &ThinVec<T>) -> Option<Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self[..].partial_cmp(&other[..])
     }
 }
@@ -1777,7 +1797,7 @@ where
     T: Ord,
 {
     #[inline]
-    fn cmp(&self, other: &ThinVec<T>) -> Ordering {
+    fn cmp(&self, other: &Self) -> Ordering {
         self[..].cmp(&other[..])
     }
 }
@@ -1931,14 +1951,14 @@ where
     T: Clone,
 {
     #[inline]
-    fn clone(&self) -> ThinVec<T> {
+    fn clone(&self) -> Self {
         #[cold]
         #[inline(never)]
         fn clone_non_singleton<T: Clone>(this: &ThinVec<T>) -> ThinVec<T> {
             let len = this.len();
             let mut new_vec = ThinVec::<T>::with_capacity(len);
             let mut data_raw = new_vec.data_raw();
-            for x in this.iter() {
+            for x in this {
                 unsafe {
                     ptr::write(data_raw, x.clone());
                     data_raw = data_raw.add(1);
@@ -1953,7 +1973,7 @@ where
         }
 
         if self.is_singleton() {
-            ThinVec::new()
+            Self::new()
         } else {
             clone_non_singleton(self)
         }
@@ -1961,15 +1981,15 @@ where
 }
 
 impl<T> Default for ThinVec<T> {
-    fn default() -> ThinVec<T> {
-        ThinVec::new()
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 impl<T> FromIterator<T> for ThinVec<T> {
     #[inline]
-    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> ThinVec<T> {
-        let mut vec = ThinVec::new();
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        let mut vec = Self::new();
         vec.extend(iter);
         vec
     }
@@ -1985,7 +2005,7 @@ impl<T: Clone> From<&[T]> for ThinVec<T> {
     ///
     /// assert_eq!(ThinVec::from(&[1, 2, 3][..]), thin_vec![1, 2, 3]);
     /// ```
-    fn from(s: &[T]) -> ThinVec<T> {
+    fn from(s: &[T]) -> Self {
         s.iter().cloned().collect()
     }
 }
@@ -2001,7 +2021,7 @@ impl<T: Clone> From<&mut [T]> for ThinVec<T> {
     ///
     /// assert_eq!(ThinVec::from(&mut [1, 2, 3][..]), thin_vec![1, 2, 3]);
     /// ```
-    fn from(s: &mut [T]) -> ThinVec<T> {
+    fn from(s: &mut [T]) -> Self {
         s.iter().cloned().collect()
     }
 }
@@ -2016,7 +2036,7 @@ impl<T, const N: usize> From<[T; N]> for ThinVec<T> {
     ///
     /// assert_eq!(ThinVec::from([1, 2, 3]), thin_vec![1, 2, 3]);
     /// ```
-    fn from(s: [T; N]) -> ThinVec<T> {
+    fn from(s: [T; N]) -> Self {
         core::iter::IntoIterator::into_iter(s).collect()
     }
 }
@@ -2106,7 +2126,7 @@ impl From<&str> for ThinVec<u8> {
     ///
     /// assert_eq!(ThinVec::from("123"), thin_vec![b'1', b'2', b'3']);
     /// ```
-    fn from(s: &str) -> ThinVec<u8> {
+    fn from(s: &str) -> Self {
         From::from(s.as_bytes())
     }
 }
@@ -2199,6 +2219,7 @@ impl<T> IntoIter<T> {
     /// let _ = into_iter.next().unwrap();
     /// assert_eq!(into_iter.as_slice(), &['b', 'c']);
     /// ```
+    #[must_use]
     pub fn as_slice(&self) -> &[T] {
         unsafe { slice::from_raw_parts(self.vec.data_raw().add(self.start), self.len()) }
     }
@@ -2218,6 +2239,7 @@ impl<T> IntoIter<T> {
     /// assert_eq!(into_iter.next().unwrap(), 'b');
     /// assert_eq!(into_iter.next().unwrap(), 'z');
     /// ```
+    #[must_use]
     pub fn as_mut_slice(&mut self) -> &mut [T] {
         unsafe { &mut *self.as_raw_mut_slice() }
     }
@@ -2274,7 +2296,7 @@ impl<T> Drop for IntoIter<T> {
             unsafe {
                 let mut vec = mem::replace(&mut this.vec, ThinVec::new());
                 ptr::drop_in_place(&mut vec[this.start..]);
-                vec.set_len_non_singleton(0)
+                vec.set_len_non_singleton(0);
             }
         }
 
@@ -2651,7 +2673,7 @@ mod tests {
 
     #[test]
     fn test_drop_empty() {
-        ThinVec::<u8>::new();
+        drop(ThinVec::<u8>::new());
     }
 
     #[test]
@@ -2670,6 +2692,7 @@ mod tests {
     #[cfg_attr(feature = "gecko-ffi", should_panic)]
     fn test_overaligned_type_is_rejected_for_gecko_ffi_mode() {
         #[repr(align(16))]
+        #[allow(dead_code)]
         struct Align16(u8);
 
         let v = ThinVec::<Align16>::new();
@@ -2735,7 +2758,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic = "assertion failed: end <= len"]
     fn test_drain_out_of_bounds() {
         let mut v = thin_vec![1, 2, 3, 4, 5];
         v.drain(5..6);
@@ -2756,7 +2779,7 @@ mod tests {
         assert_eq!(v, &[1.to_string(), 5.to_string()]);
 
         let mut v: ThinVec<_> = thin_vec![(); 5];
-        for _ in v.drain(1..4).rev() {}
+        for () in v.drain(1..4).rev() {}
         assert_eq!(v, &[(), ()]);
     }
 
@@ -2766,7 +2789,7 @@ mod tests {
         unsafe {
             v.set_len(MAX_CAP);
         }
-        for _ in v.drain(MAX_CAP - 1..) {}
+        for () in v.drain(MAX_CAP - 1..) {}
         assert_eq!(v.len(), MAX_CAP - 1);
     }
 
@@ -2811,6 +2834,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn test_empty_singleton_torture() {
         {
             let mut v = ThinVec::<i32>::new();
@@ -2832,7 +2856,7 @@ mod tests {
 
             let v = ThinVec::<i32>::new();
             #[allow(clippy::never_loop)]
-            for _ in v.into_iter() {
+            for _ in v {
                 unreachable!();
             }
         }
@@ -3024,7 +3048,6 @@ mod std_tests {
         string::{String, ToString},
     };
     use core::mem::size_of;
-    use core::usize;
 
     struct DropCounter<'a> {
         count: &'a mut u32,
@@ -3092,11 +3115,15 @@ mod std_tests {
         v.push(16);
 
         v.reserve(16);
-        assert!(v.capacity() >= 33)
+        assert!(v.capacity() >= 33);
     }
 
     #[test]
     fn test_extend() {
+        // Zero sized types
+        #[derive(PartialEq, Debug)]
+        struct Foo;
+
         let mut v = ThinVec::<usize>::new();
         let mut w = ThinVec::new();
         v.extend(w.clone());
@@ -3104,24 +3131,20 @@ mod std_tests {
 
         v.extend(0..3);
         for i in 0..3 {
-            w.push(i)
+            w.push(i);
         }
 
         assert_eq!(v, w);
 
         v.extend(3..10);
         for i in 3..10 {
-            w.push(i)
+            w.push(i);
         }
 
         assert_eq!(v, w);
 
         v.extend(w.clone()); // specializes to `append`
         assert!(v.iter().eq(w.iter().chain(w.iter())));
-
-        // Zero sized types
-        #[derive(PartialEq, Debug)]
-        struct Foo;
 
         let mut a = ThinVec::new();
         let b = thin_vec![Foo, Foo];
@@ -3222,7 +3245,7 @@ mod std_tests {
         let z = w.clone();
         assert_eq!(w, z);
         // they should be disjoint in memory.
-        assert!(w.as_ptr() != z.as_ptr())
+        assert!(w.as_ptr() != z.as_ptr());
     }
 
     #[test]
@@ -3244,7 +3267,7 @@ mod std_tests {
 
         // short, long
         v.clone_from(&three);
-        assert_eq!(v, three)
+        assert_eq!(v, three);
     }
 
     #[test]
@@ -3268,6 +3291,7 @@ mod std_tests {
 
     #[test]
     fn test_dedup() {
+        #[allow(clippy::needless_pass_by_value)]
         fn case(a: ThinVec<i32>, b: ThinVec<i32>) {
             let mut v = a;
             v.dedup();
@@ -3285,6 +3309,7 @@ mod std_tests {
 
     #[test]
     fn test_dedup_by_key() {
+        #[allow(clippy::needless_pass_by_value)]
         fn case(a: ThinVec<i32>, b: ThinVec<i32>) {
             let mut v = a;
             v.dedup_by_key(|i| *i / 10);
@@ -3387,7 +3412,7 @@ mod std_tests {
     fn test_zip_unzip() {
         let z1 = thin_vec![(1, 4), (2, 5), (3, 6)];
 
-        let (left, right): (ThinVec<_>, ThinVec<_>) = z1.iter().cloned().unzip();
+        let (left, right): (ThinVec<_>, ThinVec<_>) = z1.iter().copied().unzip();
 
         assert_eq!((1, 4), (left[0], right[0]));
         assert_eq!((2, 5), (left[1], right[1]));
@@ -3397,6 +3422,7 @@ mod std_tests {
     #[test]
     fn test_vec_truncate_drop() {
         static mut DROPS: u32 = 0;
+        #[allow(dead_code)]
         struct Elem(i32);
         impl Drop for Elem {
             fn drop(&mut self) {
@@ -3415,19 +3441,19 @@ mod std_tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic = "BadElem panic: 0xbadbeef"]
     fn test_vec_truncate_fail() {
+        const PANIC_ON: i32 = 0xbad_beef;
+
         struct BadElem(i32);
         impl Drop for BadElem {
             fn drop(&mut self) {
-                let BadElem(ref mut x) = *self;
-                if *x == 0xbadbeef {
-                    panic!("BadElem panic: 0xbadbeef")
-                }
+                let Self(ref mut x) = *self;
+                assert!(*x != PANIC_ON, "BadElem panic: 0xbadbeef");
             }
         }
 
-        let mut v = thin_vec![BadElem(1), BadElem(2), BadElem(0xbadbeef), BadElem(4)];
+        let mut v = thin_vec![BadElem(1), BadElem(2), BadElem(PANIC_ON), BadElem(4)];
         v.truncate(0);
     }
 
@@ -3438,49 +3464,49 @@ mod std_tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic = "index out of bounds: the len is 3 but the index is 3"]
     fn test_index_out_of_bounds() {
         let vec = thin_vec![1, 2, 3];
         let _ = vec[3];
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic = "range start index 18446744073709551615 out of range for slice of length 5"]
     fn test_slice_out_of_bounds_1() {
         let x = thin_vec![1, 2, 3, 4, 5];
         let _ = &x[!0..];
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic = "range end index 6 out of range for slice of length 5"]
     fn test_slice_out_of_bounds_2() {
         let x = thin_vec![1, 2, 3, 4, 5];
         let _ = &x[..6];
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic = "slice index starts at 18446744073709551615 but ends at 4"]
     fn test_slice_out_of_bounds_3() {
         let x = thin_vec![1, 2, 3, 4, 5];
         let _ = &x[!0..4];
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic = "range end index 6 out of range for slice of length 5"]
     fn test_slice_out_of_bounds_4() {
         let x = thin_vec![1, 2, 3, 4, 5];
         let _ = &x[1..6];
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic = "slice index starts at 3 but ends at 2"]
     fn test_slice_out_of_bounds_5() {
         let x = thin_vec![1, 2, 3, 4, 5];
         let _ = &x[3..2];
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic = "Index out of bounds"]
     fn test_swap_remove_empty() {
         let mut vec = ThinVec::<i32>::new();
         vec.swap_remove(0);
@@ -3550,7 +3576,7 @@ mod std_tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic = "assertion failed: end <= len"]
     fn test_drain_out_of_bounds() {
         let mut v = thin_vec![1, 2, 3, 4, 5];
         v.drain(5..6);
@@ -3571,7 +3597,7 @@ mod std_tests {
         assert_eq!(v, &[1.to_string(), 5.to_string()]);
 
         let mut v: ThinVec<_> = thin_vec![(); 5];
-        for _ in v.drain(1..4).rev() {}
+        for () in v.drain(1..4).rev() {}
         assert_eq!(v, &[(), ()]);
     }
 
@@ -3601,23 +3627,23 @@ mod std_tests {
     #[test]
     #[cfg(not(feature = "gecko-ffi"))]
     fn test_drain_max_vec_size() {
-        let mut v = ThinVec::<()>::with_capacity(usize::max_value());
+        let mut v = ThinVec::<()>::with_capacity(usize::MAX);
         unsafe {
-            v.set_len(usize::max_value());
+            v.set_len(usize::MAX);
         }
-        for _ in v.drain(usize::max_value() - 1..) {}
-        assert_eq!(v.len(), usize::max_value() - 1);
+        for () in v.drain(usize::MAX - 1..) {}
+        assert_eq!(v.len(), usize::MAX - 1);
 
-        let mut v = ThinVec::<()>::with_capacity(usize::max_value());
+        let mut v = ThinVec::<()>::with_capacity(usize::MAX);
         unsafe {
-            v.set_len(usize::max_value());
+            v.set_len(usize::MAX);
         }
-        for _ in v.drain(usize::max_value() - 1..=usize::max_value() - 1) {}
-        assert_eq!(v.len(), usize::max_value() - 1);
+        for () in v.drain((usize::MAX - 1)..usize::MAX) {}
+        assert_eq!(v.len(), usize::MAX - 1);
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic = "assertion failed: end <= len"]
     fn test_drain_inclusive_out_of_bounds() {
         let mut v = thin_vec![1, 2, 3, 4, 5];
         v.drain(5..=5);
@@ -3627,7 +3653,7 @@ mod std_tests {
     fn test_splice() {
         let mut v = thin_vec![1, 2, 3, 4, 5];
         let a = [10, 11, 12];
-        v.splice(2..4, a.iter().cloned());
+        v.splice(2..4, a.iter().copied());
         assert_eq!(v, &[1, 2, 10, 11, 12, 5]);
         v.splice(1..3, Some(20));
         assert_eq!(v, &[1, 20, 11, 12, 5]);
@@ -3637,7 +3663,7 @@ mod std_tests {
     fn test_splice_inclusive_range() {
         let mut v = thin_vec![1, 2, 3, 4, 5];
         let a = [10, 11, 12];
-        let t1: ThinVec<_> = v.splice(2..=3, a.iter().cloned()).collect();
+        let t1: ThinVec<_> = v.splice(2..=3, a.iter().copied()).collect();
         assert_eq!(v, &[1, 2, 10, 11, 12, 5]);
         assert_eq!(t1, &[3, 4]);
         let t2: ThinVec<_> = v.splice(1..=2, Some(20)).collect();
@@ -3646,26 +3672,26 @@ mod std_tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic = "assertion failed: end <= len"]
     fn test_splice_out_of_bounds() {
         let mut v = thin_vec![1, 2, 3, 4, 5];
         let a = [10, 11, 12];
-        v.splice(5..6, a.iter().cloned());
+        v.splice(5..6, a.iter().copied());
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic = "assertion failed: end <= len"]
     fn test_splice_inclusive_out_of_bounds() {
         let mut v = thin_vec![1, 2, 3, 4, 5];
         let a = [10, 11, 12];
-        v.splice(5..=5, a.iter().cloned());
+        v.splice(5..=5, a.iter().copied());
     }
 
     #[test]
     fn test_splice_items_zero_sized() {
         let mut vec = thin_vec![(), (), ()];
         let vec2 = thin_vec![];
-        let t: ThinVec<_> = vec.splice(1..2, vec2.iter().cloned()).collect();
+        let t: ThinVec<_> = vec.splice(1..2, vec2.iter().copied()).collect();
         assert_eq!(vec, &[(), ()]);
         assert_eq!(t, &[()]);
     }
@@ -3682,7 +3708,7 @@ mod std_tests {
     fn test_splice_forget() {
         let mut v = thin_vec![1, 2, 3, 4, 5];
         let a = [10, 11, 12];
-        ::core::mem::forget(v.splice(2..4, a.iter().cloned()));
+        ::core::mem::forget(v.splice(2..4, a.iter().copied()));
         assert_eq!(v, &[1, 2]);
     }
 
@@ -3690,7 +3716,7 @@ mod std_tests {
     fn test_splice_from_empty() {
         let mut v = thin_vec![];
         let a = [10, 11, 12];
-        v.splice(.., a.iter().cloned());
+        v.splice(.., a.iter().copied());
         assert_eq!(v, &[10, 11, 12]);
     }
 
@@ -3747,7 +3773,7 @@ mod std_tests {
     fn test_into_iter_debug() {
         let vec = thin_vec!['a', 'b', 'c'];
         let into_iter = vec.into_iter();
-        let debug = format!("{:?}", into_iter);
+        let debug = format!("{into_iter:?}");
         assert_eq!(debug, "IntoIter(['a', 'b', 'c'])");
     }
 
@@ -3813,10 +3839,10 @@ mod std_tests {
         for i in 0..0x1000 {
             v.reserve_exact(i);
             assert!(v[0].0 == 273);
-            assert!(v.as_ptr() as usize & 0xff == 0);
+            assert!((v.as_ptr() as usize).trailing_zeros() >= 8);
             v.shrink_to_fit();
             assert!(v[0].0 == 273);
-            assert!(v.as_ptr() as usize & 0xff == 0);
+            assert!((v.as_ptr() as usize).trailing_zeros() >= 8);
         }
     }
 
@@ -4007,7 +4033,7 @@ mod std_tests {
         v.push(16);
 
         v.reserve_exact(16);
-        assert!(v.capacity() >= 33)
+        assert!(v.capacity() >= 33);
     }
 
     /* TODO: implement try_reserve
@@ -4196,6 +4222,9 @@ mod std_tests {
     #[test]
     #[cfg_attr(feature = "gecko-ffi", ignore)]
     fn test_header_data() {
+        #[repr(C, align(128))]
+        struct Funky<T>(T);
+
         macro_rules! assert_aligned_head_ptr {
             ($typename:ty) => {{
                 let v: ThinVec<$typename> = ThinVec::with_capacity(1 /* ensure allocation */);
@@ -4212,8 +4241,6 @@ mod std_tests {
         const HEADER_SIZE: usize = core::mem::size_of::<Header>();
         assert_eq!(2 * core::mem::size_of::<usize>(), HEADER_SIZE);
 
-        #[repr(C, align(128))]
-        struct Funky<T>(T);
         assert_eq!(padding::<Funky<()>>(), 128 - HEADER_SIZE);
         assert_aligned_head_ptr!(Funky<()>);
 
