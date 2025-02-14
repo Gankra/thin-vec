@@ -163,6 +163,9 @@ use core::{fmt, mem, ptr, slice};
 
 use impl_details::*;
 
+#[cfg(feature = "malloc_size_of")]
+use malloc_size_of::{MallocShallowSizeOf, MallocSizeOf, MallocSizeOfOps};
+
 // modules: a simple way to cfg a whole bunch of impl details at once
 
 #[cfg(not(feature = "gecko-ffi"))]
@@ -1870,6 +1873,33 @@ impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for ThinVec<T> {
         }
 
         deserializer.deserialize_seq(ThinVecVisitor::<T>(PhantomData))
+    }
+}
+
+#[cfg(feature = "malloc_size_of")]
+impl<T> MallocShallowSizeOf for ThinVec<T> {
+    fn shallow_size_of(&self, ops: &mut MallocSizeOfOps) -> usize {
+        if self.capacity() == 0 {
+            // If it's the singleton we might not be a heap pointer.
+            return 0;
+        }
+
+        assert_eq!(
+            std::mem::size_of::<Self>(),
+            std::mem::size_of::<*const ()>()
+        );
+        unsafe { ops.malloc_size_of(*(self as *const Self as *const *const ())) }
+    }
+}
+
+#[cfg(feature = "malloc_size_of")]
+impl<T: MallocSizeOf> MallocSizeOf for ThinVec<T> {
+    fn size_of(&self, ops: &mut MallocSizeOfOps) -> usize {
+        let mut n = self.shallow_size_of(ops);
+        for elem in self.iter() {
+            n += elem.size_of(ops);
+        }
+        n
     }
 }
 
