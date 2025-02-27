@@ -25,3 +25,6 @@ malloc_size_of = { version = "0.1", default-features = false, optional = true }
 
 [dev-dependencies]
 serde_test = "1.0"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(no_global_oom_handling)'] }
