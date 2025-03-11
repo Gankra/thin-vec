@@ -24,6 +24,8 @@ jobs:
         run: MIRIFLAGS=-Zmiri-strict-provenance cargo miri test
       - name: Test (gecko-ffi) with Miri
         run: MIRIFLAGS=-Zmiri-strict-provenance cargo miri test --features=gecko-ffi
+      - name: Test (unstable features) with Miri
+        run: MIRIFLAGS=-Zmiri-strict-provenance cargo miri test --features=unstable
 
   build:
     runs-on: ubuntu-latest
