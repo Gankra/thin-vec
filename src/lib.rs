@@ -460,9 +460,9 @@ fn header_with_capacity<T>(cap: usize) -> NonNull<Header> {
                 _len: 0,
                 _cap: if mem::size_of::<T>() == 0 {
                     // "Infinite" capacity for zero-sized types:
-                    MAX_CAP
+                    MAX_CAP as SizeType
                 } else {
-                    cap
+                    assert_size(cap)
                 },
             },
         );
