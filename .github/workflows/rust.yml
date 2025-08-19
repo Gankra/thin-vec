@@ -46,6 +46,16 @@ jobs:
     - name: Run tests (no_std)
       run: cargo test --tests --no-default-features --verbose
 
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: 1.53
+          override: true
+      - run: cargo +1.53 check
+
   fmt:
     runs-on: ubuntu-latest
     steps:
