@@ -505,12 +505,12 @@ macro_rules! thin_vec {
     });
     () => {$crate::ThinVec::new()};
     ($($x:expr),*) => ({
-        let len = [$(thin_vec!(@UNIT $x)),*].len();
+        let len = [$($crate::thin_vec!(@UNIT $x)),*].len();
         let mut vec = $crate::ThinVec::with_capacity(len);
         $(vec.push($x);)*
         vec
     });
-    ($($x:expr,)*) => (thin_vec![$($x),*]);
+    ($($x:expr,)*) => ($crate::thin_vec![$($x),*]);
 }
 
 impl<T> ThinVec<T> {
