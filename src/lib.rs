@@ -4356,6 +4356,38 @@ mod std_tests {
         }
     */
 
+    #[cfg(all(feature = "gecko-ffi"))]
+    #[test]
+    fn auto_t_array_basic() {
+        crate::auto_thin_vec!(let t: [u8; 10]);
+        assert_eq!(t.capacity(), 10);
+        assert!(!t.has_allocation());
+        {
+            let inner = unsafe { &mut *t.as_mut().as_mut_ptr() };
+            for i in 0..30 {
+                inner.push(i as u8);
+            }
+        }
+
+        assert_eq!(t.len(), 30);
+        assert!(t.has_allocation());
+        assert_eq!(t[5], 5);
+        assert_eq!(t[29], 29);
+        assert!(t.capacity() >= 30);
+
+        {
+            let inner = unsafe { &mut *t.as_mut().as_mut_ptr() };
+            inner.truncate(5);
+        }
+
+        assert_eq!(t.len(), 5);
+        assert!(t.capacity() >= 30);
+        assert!(t.has_allocation());
+        t.as_mut().shrink_to_fit();
+        assert!(!t.has_allocation());
+        assert_eq!(t.capacity(), 10);
+    }
+
     #[test]
     #[cfg_attr(feature = "gecko-ffi", ignore)]
     fn test_header_data() {
