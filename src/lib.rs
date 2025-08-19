@@ -2681,6 +2681,7 @@ impl<T, const N: usize> AutoThinVec<T, N> {
         debug_assert!(self.is_singleton());
         let this = unsafe { self.get_unchecked_mut() };
         this.buffer.header.set_len(0);
+        // TODO(emilio): Use NonNull::from_mut when msrv allows.
         this.inner.ptr = NonNull::new_unchecked(&mut this.buffer.header);
     }
 
@@ -2728,7 +2729,7 @@ impl<T, const N: usize> Deref for AutoThinVec<T, N> {
 #[macro_export]
 macro_rules! auto_thin_vec {
     (let $name:ident : [$ty:ty; $cap:literal]) => {
-        let mut auto_vec = $crate::AutoThinVec::<$ty, $cap>::new_unpinned();
+        let auto_vec = $crate::AutoThinVec::<$ty, $cap>::new_unpinned();
         let mut $name = core::pin::pin!(auto_vec);
         unsafe { $name.as_mut().shrink_to_fit_known_singleton() };
     };
