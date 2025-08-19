@@ -2681,6 +2681,7 @@ impl<T, const N: usize> AutoThinVec<T, N> {
         debug_assert!(self.is_singleton());
         let this = unsafe { self.get_unchecked_mut() };
         this.buffer.header.set_len(0);
+        // TODO(emilio): Use NonNull::from_mut when msrv allows.
         this.inner.ptr = NonNull::new_unchecked(&mut this.buffer.header);
     }
 
@@ -2728,7 +2729,7 @@ impl<T, const N: usize> Deref for AutoThinVec<T, N> {
 #[macro_export]
 macro_rules! auto_thin_vec {
     (let $name:ident : [$ty:ty; $cap:literal]) => {
-        let mut auto_vec = $crate::AutoThinVec::<$ty, $cap>::new_unpinned();
+        let auto_vec = $crate::AutoThinVec::<$ty, $cap>::new_unpinned();
         let mut $name = core::pin::pin!(auto_vec);
         unsafe { $name.as_mut().shrink_to_fit_known_singleton() };
     };
@@ -4354,6 +4355,38 @@ mod std_tests {
             }
         }
     */
+
+    #[cfg(all(feature = "gecko-ffi"))]
+    #[test]
+    fn auto_t_array_basic() {
+        crate::auto_thin_vec!(let t: [u8; 10]);
+        assert_eq!(t.capacity(), 10);
+        assert!(!t.has_allocation());
+        {
+            let inner = unsafe { &mut *t.as_mut().as_mut_ptr() };
+            for i in 0..30 {
+                inner.push(i as u8);
+            }
+        }
+
+        assert_eq!(t.len(), 30);
+        assert!(t.has_allocation());
+        assert_eq!(t[5], 5);
+        assert_eq!(t[29], 29);
+        assert!(t.capacity() >= 30);
+
+        {
+            let inner = unsafe { &mut *t.as_mut().as_mut_ptr() };
+            inner.truncate(5);
+        }
+
+        assert_eq!(t.len(), 5);
+        assert!(t.capacity() >= 30);
+        assert!(t.has_allocation());
+        t.as_mut().shrink_to_fit();
+        assert!(!t.has_allocation());
+        assert_eq!(t.capacity(), 10);
+    }
 
     #[test]
     #[cfg_attr(feature = "gecko-ffi", ignore)]

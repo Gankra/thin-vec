@@ -22,8 +22,11 @@ jobs:
           cargo miri setup
       - name: Test (default) with Miri
         run: MIRIFLAGS=-Zmiri-strict-provenance cargo miri test
+      - name: Test (default) with Miri + Tree Borrows
+        run: MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows" cargo miri test
+      # AutoThinVec needs tree borrows.
       - name: Test (gecko-ffi) with Miri
-        run: MIRIFLAGS=-Zmiri-strict-provenance cargo miri test --features=gecko-ffi
+        run: MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows" cargo miri test --features=gecko-ffi
       - name: Test (unstable features) with Miri
         run: MIRIFLAGS=-Zmiri-strict-provenance cargo miri test --features=unstable
 
