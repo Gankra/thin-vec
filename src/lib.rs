@@ -192,7 +192,7 @@ mod impl_details {
     // struct {
     //   uint32_t mLength;
     //   uint32_t mCapacity: 31;
-    //   uint32_t mIsAutoArray: 1;
+    //   uint32_t mIsAutoBuffer: 1;
     // }
     // ```
     //
@@ -206,10 +206,6 @@ mod impl_details {
     // our capacity u32. On big-endian platforms, it will be the low bit.
     // Hence we need some platform-specific CFGs for the necessary masking/shifting.
     //
-    // `ThinVec` won't ever construct an auto array. They only happen when
-    // bridging from C++. This means we don't need to ever set/preserve the bit.
-    // We just need to be able to read and handle it if it happens to be there.
-    //
     // Handling the auto bit mostly just means not freeing/reallocating the buffer.
 
     pub type SizeType = u32;
@@ -222,7 +218,7 @@ mod impl_details {
     // guards against the high bit being set.
     #[cfg(target_endian = "little")]
     pub fn pack_capacity(cap: SizeType) -> SizeType {
-        cap as SizeType
+        cap
     }
     #[cfg(target_endian = "little")]
     pub fn unpack_capacity(cap: SizeType) -> usize {
@@ -232,13 +228,17 @@ mod impl_details {
     pub fn is_auto(cap: SizeType) -> bool {
         (cap & (1 << 31)) != 0
     }
+    #[cfg(target_endian = "little")]
+    pub fn pack_capacity_and_auto(cap: SizeType, auto: bool) -> SizeType {
+        cap | ((auto as SizeType) << 31)
+    }
 
     // Big endian: the auto bit is the low bit, and the capacity is
     // shifted up one bit. Masking out the auto bit is unnecessary,
     // as rust shifts always shift in 0's for unsigned integers.
     #[cfg(target_endian = "big")]
     pub fn pack_capacity(cap: SizeType) -> SizeType {
-        (cap as SizeType) << 1
+        cap << 1
     }
     #[cfg(target_endian = "big")]
     pub fn unpack_capacity(cap: SizeType) -> usize {
@@ -247,6 +247,10 @@ mod impl_details {
     #[cfg(target_endian = "big")]
     pub fn is_auto(cap: SizeType) -> bool {
         (cap & 1) != 0
+    }
+    #[cfg(target_endian = "big")]
+    pub fn pack_capacity_and_auto(cap: SizeType, auto: bool) -> SizeType {
+        (cap << 1) | (auto as SizeType)
     }
 
     #[inline]
@@ -2598,6 +2602,111 @@ impl<I: Iterator> Drop for Splice<'_, I> {
         }
         // Let `Drain::drop` move the tail back if necessary and restore `vec.len`.
     }
+}
+
+#[cfg(feature = "gecko-ffi")]
+#[repr(C)]
+struct AutoBuffer<T, const N: usize> {
+    header: Header,
+    buffer: mem::MaybeUninit<[T; N]>,
+}
+
+#[doc(hidden)]
+#[cfg(feature = "gecko-ffi")]
+#[repr(C)]
+pub struct AutoThinVec<T, const N: usize> {
+    inner: ThinVec<T>,
+    buffer: AutoBuffer<T, N>,
+    _pinned: std::marker::PhantomPinned,
+}
+
+#[cfg(feature = "gecko-ffi")]
+impl<T, const N: usize> AutoThinVec<T, N> {
+    /// Implementation detail for the auto_thin_vec macro.
+    #[inline]
+    #[doc(hidden)]
+    pub fn new_unpinned() -> Self {
+        // This condition is hard-coded in nsTArray.h
+        assert!(
+            std::mem::align_of::<T>() <= 8,
+            "Can't handle alignments greater than 8"
+        );
+        Self {
+            inner: ThinVec::new(),
+            buffer: AutoBuffer {
+                header: Header {
+                    _len: 0,
+                    _cap: pack_capacity_and_auto(N as SizeType, true),
+                },
+                buffer: mem::MaybeUninit::uninit(),
+            },
+            _pinned: std::marker::PhantomPinned,
+        }
+    }
+
+    /// Returns a raw pointer to the inner ThinVec. Note that if you dereference it from rust, you
+    /// need to make sure not to move the ThinVec manually via something like
+    /// `std::mem::take(&mut auto_vec)`.
+    pub fn as_mut_ptr(self: std::pin::Pin<&mut Self>) -> *mut ThinVec<T> {
+        unsafe { &mut self.get_unchecked_mut().inner }
+    }
+
+    #[inline]
+    pub unsafe fn shrink_to_fit_known_singleton(self: std::pin::Pin<&mut Self>) {
+        debug_assert!(self.is_singleton());
+        let this = unsafe { self.get_unchecked_mut() };
+        this.buffer.header.set_len(0);
+        this.inner.ptr = NonNull::new_unchecked(&mut this.buffer.header);
+    }
+
+    pub fn shrink_to_fit(self: std::pin::Pin<&mut Self>) {
+        if self.inner.is_singleton() {
+            return unsafe { self.shrink_to_fit_known_singleton() };
+        }
+        let this = unsafe { self.get_unchecked_mut() };
+        if !this.inner.has_allocation() {
+            return;
+        }
+        let len = this.len();
+        if len > N {
+            return this.inner.shrink_to_fit();
+        }
+        let old_header = this.inner.ptr();
+        let old_cap = this.inner.capacity();
+        unsafe {
+            (this.buffer.buffer.as_mut_ptr() as *mut T)
+                .copy_from_nonoverlapping(this.inner.data_raw(), len);
+        }
+        this.buffer.header.set_len(len);
+        unsafe {
+            this.inner.ptr = NonNull::new_unchecked(&mut this.buffer.header);
+            dealloc(old_header as *mut u8, layout::<T>(old_cap));
+        }
+    }
+}
+
+// NOTE(emilio): DerefMut wouldn't be safe, see the comment in as_mut_ptr.
+#[cfg(feature = "gecko-ffi")]
+impl<T, const N: usize> Deref for AutoThinVec<T, N> {
+    type Target = ThinVec<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+/// Create a ThinVec<$ty> named `$name`, with capacity for `$cap` inline elements.
+///
+/// TODO(emilio): This would be a lot more convenient to use with super let, see
+/// https://github.com/rust-lang/rust/issues/139076
+#[cfg(feature = "gecko-ffi")]
+#[macro_export]
+macro_rules! auto_thin_vec {
+    (let $name:ident : [$ty:ty; $cap:literal]) => {
+        let mut auto_vec = $crate::AutoThinVec::<$ty, $cap>::new_unpinned();
+        let mut $name = core::pin::pin!(auto_vec);
+        unsafe { $name.as_mut().shrink_to_fit_known_singleton() };
+    };
 }
 
 /// Private helper methods for `Splice::drop`
