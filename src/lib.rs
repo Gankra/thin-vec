@@ -160,7 +160,7 @@ use core::ops::Bound;
 use core::ops::{Deref, DerefMut, RangeBounds};
 use core::ptr::NonNull;
 use core::slice::Iter;
-use core::{fmt, mem, ptr, slice};
+use core::{fmt, mem, ops, ptr, slice};
 
 use impl_details::*;
 
@@ -1585,26 +1585,91 @@ impl<T> ThinVec<T> {
     ///
     /// let mut numbers = thin_vec![1, 2, 3, 4, 5, 6, 8, 9, 11, 13, 14, 15];
     ///
-    /// let evens = numbers.extract_if(|x| *x % 2 == 0).collect::<ThinVec<_>>();
+    /// let evens = numbers.extract_if(.., |x| *x % 2 == 0).collect::<ThinVec<_>>();
     /// let odds = numbers;
     ///
     /// assert_eq!(evens, thin_vec![2, 4, 6, 8, 14]);
     /// assert_eq!(odds, thin_vec![1, 3, 5, 9, 11, 13, 15]);
     /// ```
-    pub fn extract_if<F>(&mut self, filter: F) -> ExtractIf<'_, T, F>
+    pub fn extract_if<F, R: RangeBounds<usize>>(
+        &mut self,
+        range: R,
+        filter: F,
+    ) -> ExtractIf<'_, T, F>
     where
         F: FnMut(&mut T) -> bool,
     {
+        // Copy of https://github.com/rust-lang/rust/blob/ee361e8fca1c30e13e7a31cc82b64c045339d3a8/library/core/src/slice/index.rs#L37
+        fn slice_index_fail(start: usize, end: usize, len: usize) -> ! {
+            if start > len {
+                panic!(
+                    "range start index {} out of range for slice of length {}",
+                    start, len
+                )
+            }
+
+            if end > len {
+                panic!(
+                    "range end index {} out of range for slice of length {}",
+                    end, len
+                )
+            }
+
+            if start > end {
+                panic!("slice index starts at {} but ends at {}", start, end)
+            }
+
+            // Only reachable if the range was a `RangeInclusive` or a
+            // `RangeToInclusive`, with `end == len`.
+            panic!(
+                "range end index {} out of range for slice of length {}",
+                end, len
+            )
+        }
+
+        // Backport of https://github.com/rust-lang/rust/blob/ee361e8fca1c30e13e7a31cc82b64c045339d3a8/library/core/src/slice/index.rs#L855
+        pub fn slice_range<R>(range: R, bounds: ops::RangeTo<usize>) -> ops::Range<usize>
+        where
+            R: ops::RangeBounds<usize>,
+        {
+            let len = bounds.end;
+
+            let end = match range.end_bound() {
+                ops::Bound::Included(&end) if end >= len => slice_index_fail(0, end, len),
+                // Cannot overflow because `end < len` implies `end < usize::MAX`.
+                ops::Bound::Included(&end) => end + 1,
+
+                ops::Bound::Excluded(&end) if end > len => slice_index_fail(0, end, len),
+                ops::Bound::Excluded(&end) => end,
+                ops::Bound::Unbounded => len,
+            };
+
+            let start = match range.start_bound() {
+                ops::Bound::Excluded(&start) if start >= end => slice_index_fail(start, end, len),
+                // Cannot overflow because `start < end` implies `start < usize::MAX`.
+                ops::Bound::Excluded(&start) => start + 1,
+
+                ops::Bound::Included(&start) if start > end => slice_index_fail(start, end, len),
+                ops::Bound::Included(&start) => start,
+
+                ops::Bound::Unbounded => 0,
+            };
+
+            ops::Range { start, end }
+        }
+
         let old_len = self.len();
-        // Guard against us getting leaked (leak amplification)
+        let ops::Range { start, end } = slice_range(range, ..old_len);
+
+        // Guard against the vec getting leaked (leak amplification)
         unsafe {
             self.set_len(0);
         }
-
         ExtractIf {
             vec: self,
-            idx: 0,
+            idx: start,
             del: 0,
+            end,
             old_len,
             pred: filter,
         }
@@ -2851,6 +2916,8 @@ pub struct ExtractIf<'a, T, F> {
     vec: &'a mut ThinVec<T>,
     /// The index of the item that will be inspected by the next call to `next`.
     idx: usize,
+    /// Elements at and beyond this point will be retained. Must be equal or smaller than `old_len`.
+    end: usize,
     /// The number of items that have been drained (removed) thus far.
     del: usize,
     /// The original length of `vec` prior to draining.
@@ -2865,9 +2932,9 @@ where
 {
     type Item = T;
 
-    fn next(&mut self) -> Option<Self::Item> {
+    fn next(&mut self) -> Option<T> {
         unsafe {
-            while self.idx < self.old_len {
+            while self.idx < self.end {
                 let i = self.idx;
                 let v = slice::from_raw_parts_mut(self.vec.as_mut_ptr(), self.old_len);
                 let drained = (self.pred)(&mut v[i]);
@@ -2890,7 +2957,7 @@ where
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (0, Some(self.old_len - self.idx))
+        (0, Some(self.end - self.idx))
     }
 }
 
