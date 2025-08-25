@@ -20,15 +20,13 @@ jobs:
           rustup toolchain install nightly --component miri
           rustup override set nightly
           cargo miri setup
-      - name: Test (default) with Miri
-        run: MIRIFLAGS=-Zmiri-strict-provenance cargo miri test
+      # We do not use Stacked Borrows anymore, since ExtractIf (which is lifted from std) does not pass SB,
+      # and if std can do it in non-magical data structure code, we can do it too.
       - name: Test (default) with Miri + Tree Borrows
         run: MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows" cargo miri test
       # AutoThinVec needs tree borrows.
       - name: Test (gecko-ffi) with Miri
         run: MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows" cargo miri test --features=gecko-ffi
-      - name: Test (unstable features) with Miri
-        run: MIRIFLAGS=-Zmiri-strict-provenance cargo miri test --features=unstable
 
   build:
     runs-on: ubuntu-latest
@@ -40,14 +38,14 @@ jobs:
       run: cargo build --features=malloc_size_of --verbose
     - name: Run tests
       run: cargo test --verbose
-    - name: Run tests
-      run: cargo test --verbose
     - name: Run tests (serde)
       run: cargo test --features=serde --verbose
     - name: Run tests (gecko-ffi)
       run: cargo test --tests --features=gecko-ffi --verbose
     - name: Run tests (no_std)
       run: cargo test --tests --no-default-features --verbose
+    - name: Run tests (unstable)
+      run: cargo +nightly test --features=unstable --verbose
 
   msrv:
     runs-on: ubuntu-latest
