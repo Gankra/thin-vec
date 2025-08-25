@@ -165,6 +165,8 @@ use core::slice::Iter;
 use core::{fmt, mem, ptr, slice};
 
 use impl_details::{assert_size, SizeType, MAX_CAP};
+#[cfg(feature = "gecko-ffi")]
+use impl_details::{is_auto, pack_capacity, pack_capacity_and_auto, unpack_capacity};
 
 #[cfg(feature = "malloc_size_of")]
 use malloc_size_of::{MallocShallowSizeOf, MallocSizeOf, MallocSizeOfOps};
@@ -209,6 +211,8 @@ mod impl_details {
     // Hence we need some platform-specific CFGs for the necessary masking/shifting.
     //
     // Handling the auto bit mostly just means not freeing/reallocating the buffer.
+    #[cfg(feature = "gecko-ffi")]
+    use core::convert::TryFrom;
 
     pub type SizeType = u32;
 
@@ -232,7 +236,7 @@ mod impl_details {
     }
     #[cfg(target_endian = "little")]
     pub fn pack_capacity_and_auto(cap: SizeType, auto: bool) -> SizeType {
-        cap | ((auto as SizeType) << 31)
+        cap | (SizeType::from(auto) << 31)
     }
 
     // Big endian: the auto bit is the low bit, and the capacity is
@@ -257,10 +261,9 @@ mod impl_details {
 
     #[inline]
     pub fn assert_size(x: usize) -> SizeType {
-        if x > MAX_CAP as usize {
+        u32::try_from(x).unwrap_or_else(|_| {
             panic!("nsTArray size may not exceed the capacity of a 32-bit sized int");
-        }
-        x as SizeType
+        })
     }
 }
 
@@ -329,22 +332,24 @@ impl Header {
 #[cfg(feature = "gecko-ffi")]
 impl Header {
     fn cap(&self) -> usize {
-        unpack_capacity(self._cap)
+        unpack_capacity(self.cap)
     }
 
     fn set_cap(&mut self, cap: usize) {
+        let cap_u32 = assert_size(cap);
+
         // debug check that our packing is working
-        debug_assert_eq!(unpack_capacity(pack_capacity(cap as SizeType)), cap);
+        debug_assert_eq!(unpack_capacity(pack_capacity(cap_u32)), cap);
         // FIXME: this assert is busted because it reads uninit memory
         // debug_assert!(!self.uses_stack_allocated_buffer());
 
         // NOTE: this always stores a cleared auto bit, because set_cap
         // is only invoked by Rust, and Rust doesn't create auto arrays.
-        self._cap = pack_capacity(assert_size(cap));
+        self.cap = pack_capacity(cap_u32);
     }
 
     fn uses_stack_allocated_buffer(&self) -> bool {
-        is_auto(self._cap)
+        is_auto(self.cap)
     }
 }
 
@@ -423,9 +428,11 @@ fn padding<T>() -> usize {
     let header_size = mem::size_of::<Header>();
 
     #[cfg(feature = "gecko-ffi")]
-    if alloc_align > header_size {
-        panic!("nsTArray does not handle alignment above > {header_size} correctly");
-    }
+    assert!(
+        alloc_align <= header_size,
+        "nsTArray does not handle alignment above > {} correctly",
+        header_size
+    );
 
     alloc_align.saturating_sub(header_size)
 }
@@ -467,7 +474,7 @@ fn header_with_capacity<T>(cap: usize) -> NonNull<Header> {
                 len: 0,
                 cap: if mem::size_of::<T>() == 0 {
                     // "Infinite" capacity for zero-sized types:
-                    MAX_CAP as SizeType
+                    MAX_CAP.try_into().unwrap()
                 } else {
                     assert_size(cap)
                 },
@@ -602,7 +609,7 @@ impl<T> ThinVec<T> {
         if cap == 0 {
             unsafe {
                 Self {
-                    ptr: NonNull::new_unchecked(std::ptr::addr_of!(EMPTY_HEADER) as *mut _),
+                    ptr: NonNull::new_unchecked(ptr::addr_of!(EMPTY_HEADER) as *mut _),
                     boo: PhantomData,
                 }
             }
@@ -1136,6 +1143,10 @@ impl<T> ThinVec<T> {
     ///
     /// This method mimics the growth algorithm used by the C++ implementation
     /// of nsTArray.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if the new capacity overflows `u32`.
     #[cfg(feature = "gecko-ffi")]
     pub fn reserve(&mut self, additional: usize) {
         let elem_size = mem::size_of::<T>();
@@ -1164,21 +1175,19 @@ impl<T> ThinVec<T> {
         // Perform some checked arithmetic to ensure all of the numbers we
         // compute will end up in range.
         let will_fit = min_cap_bytes.checked_mul(2).is_some();
-        if !will_fit {
-            panic!("Exceeded maximum nsTArray size");
-        }
+        assert!(will_fit, "Exceeded maximum nsTArray size");
 
-        const SLOW_GROWTH_THRESHOLD: usize = 8 * 1024 * 1024;
+        let slow_growth_threshold: usize = 8 * 1024 * 1024;
 
-        let bytes = if min_cap > SLOW_GROWTH_THRESHOLD {
+        let bytes = if min_cap > slow_growth_threshold {
             // Grow by a minimum of 1.125x
             let old_cap_bytes = old_cap * elem_size + mem::size_of::<Header>();
             let min_growth = old_cap_bytes + (old_cap_bytes >> 3);
             let growth = max(min_growth, min_cap_bytes as usize);
 
             // Round up to the next megabyte.
-            const MB: usize = 1 << 20;
-            MB * ((growth + MB - 1) / MB)
+            let megabyte = 1 << 20;
+            megabyte * ((growth + megabyte - 1) / megabyte)
         } else {
             // Try to allocate backing buffers in powers of two.
             min_cap_bytes.next_power_of_two() as usize
@@ -2355,7 +2364,7 @@ impl<T> Drop for IntoIter<T> {
         #[inline(never)]
         fn drop_non_singleton<T>(this: &mut IntoIter<T>) {
             unsafe {
-                let mut vec = std::mem::take(&mut this.vec);
+                let mut vec = mem::take(&mut this.vec);
                 ptr::drop_in_place(&mut vec[this.start..]);
                 vec.set_len_non_singleton(0);
             }
@@ -2670,6 +2679,7 @@ pub struct AutoThinVec<T, const N: usize> {
 impl<T, const N: usize> AutoThinVec<T, N> {
     /// Implementation detail for the auto_thin_vec macro.
     #[inline]
+    #[must_use]
     #[doc(hidden)]
     pub fn new_unpinned() -> Self {
         // This condition is hard-coded in nsTArray.h
@@ -2681,8 +2691,8 @@ impl<T, const N: usize> AutoThinVec<T, N> {
             inner: ThinVec::new(),
             buffer: AutoBuffer {
                 header: Header {
-                    _len: 0,
-                    _cap: pack_capacity_and_auto(N as SizeType, true),
+                    len: 0,
+                    cap: pack_capacity_and_auto(assert_size(N), true),
                 },
                 buffer: mem::MaybeUninit::uninit(),
             },
@@ -2693,6 +2703,7 @@ impl<T, const N: usize> AutoThinVec<T, N> {
     /// Returns a raw pointer to the inner ThinVec. Note that if you dereference it from rust, you
     /// need to make sure not to move the ThinVec manually via something like
     /// `std::mem::take(&mut auto_vec)`.
+    #[must_use]
     pub fn as_mut_ptr(self: std::pin::Pin<&mut Self>) -> *mut ThinVec<T> {
         unsafe { &mut self.get_unchecked_mut().inner }
     }
@@ -2721,13 +2732,13 @@ impl<T, const N: usize> AutoThinVec<T, N> {
         let old_header = this.inner.ptr();
         let old_cap = this.inner.capacity();
         unsafe {
-            (this.buffer.buffer.as_mut_ptr() as *mut T)
-                .copy_from_nonoverlapping(this.inner.data_raw(), len);
+            let buffer = this.buffer.buffer.as_mut_ptr().cast::<T>();
+            buffer.copy_from_nonoverlapping(this.inner.data_raw(), len);
         }
         this.buffer.header.set_len(len);
         unsafe {
             this.inner.ptr = NonNull::new_unchecked(&mut this.buffer.header);
-            dealloc(old_header as *mut u8, layout::<T>(old_cap));
+            dealloc(old_header.cast::<u8>(), layout::<T>(old_cap));
         }
     }
 }
@@ -2853,7 +2864,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(feature = "gecko-ffi", should_panic)]
+    #[cfg_attr(feature = "gecko-ffi", should_panic(expected = ""))]
     fn test_overaligned_type_is_rejected_for_gecko_ffi_mode() {
         #[repr(align(16))]
         #[allow(dead_code)]
@@ -3996,7 +4007,10 @@ mod std_tests {
     */
 
     #[test]
-    #[cfg_attr(feature = "gecko-ffi", ignore)]
+    #[cfg_attr(
+        feature = "gecko-ffi",
+        ignore = "does not handle overaligned allocations"
+    )]
     fn overaligned_allocations() {
         #[repr(align(256))]
         struct Foo(usize);
@@ -4392,8 +4406,8 @@ mod std_tests {
         assert!(!t.has_allocation());
         {
             let inner = unsafe { &mut *t.as_mut().as_mut_ptr() };
-            for i in 0..30 {
-                inner.push(i as u8);
+            for i in 0..30_u8 {
+                inner.push(i);
             }
         }
 
@@ -4417,7 +4431,7 @@ mod std_tests {
     }
 
     #[test]
-    #[cfg_attr(feature = "gecko-ffi", ignore)]
+    #[cfg_attr(feature = "gecko-ffi", ignore = "header is different with gecko-ffi")]
     fn test_header_data() {
         macro_rules! assert_aligned_head_ptr {
             ($typename:ty) => {{
