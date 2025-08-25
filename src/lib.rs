@@ -3663,7 +3663,8 @@ mod std_tests {
     }
 
     #[test]
-    #[should_panic = "slice index starts at 18446744073709551615 but ends at 4"]
+    #[should_panic]
+    #[allow(clippy::should_panic_without_expect)] // Panic message changed in nightly vs MSRV
     fn test_slice_out_of_bounds_3() {
         let x = thin_vec![1, 2, 3, 4, 5];
         let _ = &x[!0..4];
